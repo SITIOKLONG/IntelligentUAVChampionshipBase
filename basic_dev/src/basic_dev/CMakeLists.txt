@@ -7,9 +7,7 @@ project(basic_dev)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-set(OpenCV_DIR /usr/local/lib/cmake/opencv4)
-set(pcl_conversions_DIR /usr/local/share/pcl_conversions/cmake)
-set(pcl_ros_DIR /usr/local/share/pcl_ros/cmake)
+set(OpenCV_DIR /usr/lib/x86_64-linux-gnu/cmake/opencv4)
 find_package(catkin REQUIRED COMPONENTS
 airsim_ros
 message_generation
@@ -38,7 +36,7 @@ catkin_package(
   CATKIN_DEPENDS message_runtime roscpp std_msgs # nodelet 
 )
 
-include_directories(include ${catkin_INCLUDE_DIRS}  ${OpenCv_INCLUDE_DIRS})
+include_directories(include ${catkin_INCLUDE_DIRS}  ${OpenCV_INCLUDE_DIRS})
 
 
 add_executable(basic_dev src/basic_dev.cpp )
