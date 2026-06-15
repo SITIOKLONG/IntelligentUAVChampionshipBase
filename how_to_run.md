@@ -50,6 +50,12 @@ Build:
 docker build --network=host -t basic_dev .
 ```
 
+or rebuild:
+
+```bash
+docker build --network=host --no-cache -t basic_dev .
+```
+
 ## 3. Run Base
 
 ```bash
@@ -118,6 +124,23 @@ Stop simulator:
 ```bash
 docker rm -f sim01
 ```
+
+rerun docker:
+
+```bash
+docker build --network=host -t basic_dev .
+# docker restart sim01
+docker restart sim_gui
+./run_basic_dev.sh
+```
+
+rqt:
+
+```bash
+source /opt/ros/noetic/setup.zsh
+rqt
+```
+
 
 ## 7. Next step
 
