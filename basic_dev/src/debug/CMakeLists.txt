@@ -8,9 +8,13 @@ project(debug)
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
+  airsim_ros
   roscpp
   geometry_msgs
   nav_msgs
+  sensor_msgs
+  visualization_msgs
+  tf2
   tf2_ros
 )
 
@@ -119,6 +123,7 @@ catkin_package(
 include_directories(
 include
 ${catkin_INCLUDE_DIRS}
+/usr/include/eigen3
 )
 
 ## Declare a C++ library

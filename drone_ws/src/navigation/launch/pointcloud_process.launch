@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Load navigation TF -->
+    <include file="$(find navigation)/launch/navigation_tf.launch"/>
+
+    <!-- Start pointcloud processing node -->
+    <node pkg="navigation" type="pointcloud_process" name="pointcloud_process" output="screen">
+        <rosparam command="load" file="$(find navigation)/param/pointcloud_process.yaml" />
+    </node>
+
+    <!-- Start RViz with configuration -->
+    <!-- <node pkg="rviz" type="rviz" name="rviz" 
+          args="-d $(find navigation)/rviz/drone_navigation.rviz"/> -->
+</launch> 

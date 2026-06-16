@@ -8,8 +8,8 @@ USER root
 
 RUN apt update && apt install -y python3-catkin-tools libopencv-dev ros-noetic-cv-bridge ros-noetic-geographic-msgs \
     ros-noetic-tf2-sensor-msgs ros-noetic-tf2-geometry-msgs ros-noetic-image-transport \
-    net-tools \
-    ros-noetic-foxglove-bridge
+    net-tools
+    # ros-noetic-foxglove-bridge
 
 ENV ROS_DISTRO=noetic
 

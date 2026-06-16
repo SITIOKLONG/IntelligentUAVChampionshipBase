@@ -1,0 +1,33 @@
+# YOLO Detection Parameters
+yolo:
+  model_path: '/data/workspace/rmua_2025/drone_ws/src/navigation_vision/yolov8/runs/rmua2/weights/best.pt'
+  confidence_threshold: 0.8
+  min_area: 0
+  min_car_area: 15000
+  line_width: 1
+  radio_k: 0.58
+  max_door_area: 60000000
+  
+# Image Processing
+image:
+  width: 960
+  height: 720
+  center_x: 480  # width/2
+  center_y: 360  # height/2
+
+# Topics
+topics:
+  camera_input: '/airsim_node/drone_1/front_right/Scene'
+  pose_input: '/airsim_node/drone_1/drone_pose'
+  detection_output: '/airsim_node/drone_1/front_right/yolo_detect'
+  position_output: '/airsim_node/drone_1/front_right/position'
+  predict_z_output: '/airsim_node/drone_1/front_right/predict_z'
+  avoid_car_pub: '/airsim_node/drone_1/front_right/avoid_car'
+
+# Class IDs
+classes:
+  left_doors: 0
+  right_doors: 1
+  cars: 2 
+
+

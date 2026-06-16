@@ -1,0 +1,17 @@
+# Point cloud processing parameters
+
+# Voxel filter parameters
+voxel_filter:
+  leaf_size: 0.15   # 体素大小（米）
+
+# Statistical outlier removal parameters
+statistical_filter:
+  mean_k: 30                # 邻居点数量
+  std_dev_mul_thresh: 1.0   # 标准差倍数
+
+# Filter parameters
+filter:
+  y_min: -7.0              # Y轴最小值（米）
+  y_max: 7.0               # Y轴最大值（米）
+  max_time_diff: 0.5       # 最大时间差（秒）
+  min_points_threshold: 100 # 最小点数阈值 
