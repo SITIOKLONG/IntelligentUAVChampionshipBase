@@ -129,8 +129,8 @@ rerun docker:
 
 ```bash
 docker build --network=host -t basic_dev .
-# docker restart sim01
-docker restart sim_gui
+docker restart sim01
+# docker restart sim_gui
 ./run_basic_dev.sh
 ```
 
@@ -139,6 +139,22 @@ rqt:
 ```bash
 source /opt/ros/noetic/setup.zsh
 rqt
+```
+
+how to record yolo
+```bash
+docker run --rm --net host --name yolo_recorder \
+  -v /home/rl/jacksit/rmua1/IntelligentUAVChampionshipBase/drone_ws/src/navigation_vision/yolov8/images/train:/record \
+  -v /home/rl/jacksit/rmua1/IntelligentUAVChampionshipBase/drone_ws/src/navigation_vision/scripts/get_photo.py:/tmp/get_photo.py:ro \
+  --entrypoint bash basic_dev -lc '
+    source /opt/ros/noetic/setup.bash
+    python3 /tmp/get_photo.py \
+      _display:=false \
+      _autosave:=true \
+      _save_interval:=0.2 \
+      _max_images:=10000 \
+      _save_dir:=/record
+  '
 ```
 
 

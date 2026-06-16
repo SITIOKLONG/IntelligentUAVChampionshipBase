@@ -1,0 +1,27 @@
+<launch>
+  <node pkg="stereo_depth" type="stereo_depth_node" name="stereo_depth_node" output="screen">
+    <param name="width" value="960"/>
+    <param name="height" value="720"/>
+    <param name="horizontal_fov_deg" value="60.0"/>
+    <param name="baseline_m" value="0.30"/>
+    <param name="min_depth_m" value="0.4"/>
+    <param name="max_depth_m" value="40.0"/>
+    <param name="sample_step" value="4"/>
+    <param name="num_disparities" value="96"/>
+    <param name="block_size" value="7"/>
+    <param name="process_scale" value="0.5"/>
+    <param name="max_rate_hz" value="3.0"/>
+    <param name="sync_queue_size" value="1"/>
+    <param name="odom_topic" value="/eskf_odom"/>
+    <param name="world_frame_id" value="world"/>
+    <param name="front_disparity_sign" value="1.0"/>
+    <param name="back_disparity_sign" value="1.0"/>
+
+    <param name="front_left_topic" value="/airsim_node/drone_1/front_left/Scene"/>
+    <param name="front_right_topic" value="/airsim_node/drone_1/front_right/Scene"/>
+    <param name="back_left_topic" value="/airsim_node/drone_1/back_left/Scene"/>
+    <param name="back_right_topic" value="/airsim_node/drone_1/back_right/Scene"/>
+    <param name="front_points_topic" value="/stereo_depth/front/points"/>
+    <param name="back_points_topic" value="/stereo_depth/back/points"/>
+  </node>
+</launch>
