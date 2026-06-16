@@ -256,7 +256,7 @@ int main(int argc, char** argv)
         } else {
             cmd.header.stamp = ros::Time::now();
             cmd.header.frame_id = "body";
- q        }
+        }
 
         vel_pub.publish(cmd);
         rate.sleep();

@@ -23,6 +23,8 @@ constexpr const char* kVizFrame = "world";
 
 geometry_msgs::PoseStamped latest_gps;
 bool has_gps = false;
+nav_msgs::Odometry latest_odom;
+bool has_odom = false;
 geometry_msgs::PoseStamped latest_pose_ned;
 bool has_pose_ned = false;
 bool has_pose_gt = false;
@@ -203,6 +205,9 @@ void goalCb(const geometry_msgs::PoseStamped::ConstPtr& msg)
 
 void odomCb(const nav_msgs::Odometry::ConstPtr& msg)
 {
+    latest_odom = *msg;
+    has_odom = true;
+
     geometry_msgs::PoseStamped pose = makeWorldPoseFromOdom(*msg);
 
     odom_pose_pub.publish(pose);
@@ -320,7 +325,7 @@ void waypointsCb(const nav_msgs::Path::ConstPtr& msg)
 
 void lidarCb(const sensor_msgs::PointCloud2::ConstPtr& msg)
 {
-    if (!has_gps) {
+    if (!has_odom) {
         return;
     }
 
@@ -329,10 +334,10 @@ void lidarCb(const sensor_msgs::PointCloud2::ConstPtr& msg)
     out.header.stamp = stampOrNow(msg->header.stamp);
 
     tf2::Quaternion q(
-        latest_gps.pose.orientation.x,
-        latest_gps.pose.orientation.y,
-        latest_gps.pose.orientation.z,
-        latest_gps.pose.orientation.w);
+        latest_odom.pose.pose.orientation.x,
+        latest_odom.pose.pose.orientation.y,
+        latest_odom.pose.pose.orientation.z,
+        latest_odom.pose.pose.orientation.w);
     if (q.length2() < 1e-12) {
         return;
     }
@@ -340,9 +345,9 @@ void lidarCb(const sensor_msgs::PointCloud2::ConstPtr& msg)
 
     tf2::Transform body_to_world_ned(q);
     tf2::Vector3 pos_ned(
-        latest_gps.pose.position.x,
-        latest_gps.pose.position.y,
-        latest_gps.pose.position.z);
+        latest_odom.pose.pose.position.x,
+        latest_odom.pose.pose.position.y,
+        latest_odom.pose.pose.position.z);
 
     sensor_msgs::PointCloud2Iterator<float> iter_x(out, "x");
     sensor_msgs::PointCloud2Iterator<float> iter_y(out, "y");
