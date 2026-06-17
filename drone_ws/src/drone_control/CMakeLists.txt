@@ -32,3 +32,8 @@ add_executable(waypoint_pwm_controller
   src/PDcontroller.cpp
 )
 target_link_libraries(waypoint_pwm_controller ${catkin_LIBRARIES})
+
+add_executable(waypoint_vel_controller
+  src/waypoint_vel_controller.cpp
+)
+target_link_libraries(waypoint_vel_controller ${catkin_LIBRARIES})

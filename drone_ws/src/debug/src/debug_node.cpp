@@ -46,7 +46,6 @@ ros::Publisher odom_pose_pub;
 ros::Publisher odom_path_pub;
 ros::Publisher vel_cmd_marker_pub;
 ros::Publisher waypoint_path_pub;
-ros::Publisher waypoint_marker_pub;
 ros::Publisher front_left_image_plane_pub;
 ros::Publisher front_right_image_plane_pub;
 ros::Publisher back_left_image_plane_pub;
@@ -573,15 +572,6 @@ void waypointsCb(const nav_msgs::Path::ConstPtr& msg)
     out.header.frame_id = kVizFrame;
     out.header.stamp = stampOrNow(msg->header.stamp);
 
-    visualization_msgs::MarkerArray markers;
-
-    visualization_msgs::Marker clear_marker;
-    clear_marker.header = out.header;
-    clear_marker.ns = "waypoints_world";
-    clear_marker.action = visualization_msgs::Marker::DELETEALL;
-    markers.markers.push_back(clear_marker);
-
-    int id = 0;
     for (const auto& pose : msg->poses) {
         geometry_msgs::PoseStamped ps;
         ps.header = out.header;
@@ -591,27 +581,9 @@ void waypointsCb(const nav_msgs::Path::ConstPtr& msg)
             pose.pose.position.z);
         ps.pose.orientation.w = 1.0;
         out.poses.push_back(ps);
-
-        visualization_msgs::Marker marker;
-        marker.header = out.header;
-        marker.ns = "waypoints_world";
-        marker.id = id++;
-        marker.type = visualization_msgs::Marker::SPHERE;
-        marker.action = visualization_msgs::Marker::ADD;
-        marker.pose.position = ps.pose.position;
-        marker.pose.orientation.w = 1.0;
-        marker.scale.x = 2.0;
-        marker.scale.y = 2.0;
-        marker.scale.z = 2.0;
-        marker.color.a = 1.0;
-        marker.color.r = 1.0;
-        marker.color.g = 0.8;
-        marker.color.b = 0.0;
-        markers.markers.push_back(marker);
     }
 
     waypoint_path_pub.publish(out);
-    waypoint_marker_pub.publish(markers);
 }
 
 bool readImageColor(
@@ -826,8 +798,6 @@ int main(int argc, char** argv)
         nh.advertise<visualization_msgs::Marker>("/debug/vel_cmd_world", 10);
     waypoint_path_pub =
         nh.advertise<nav_msgs::Path>("/debug/waypoints_world", 1, true);
-    waypoint_marker_pub =
-        nh.advertise<visualization_msgs::MarkerArray>("/debug/waypoint_markers_world", 1, true);
     front_left_image_plane_pub =
         nh.advertise<sensor_msgs::PointCloud2>("/debug/front_left_image_plane_world", 1);
     front_right_image_plane_pub =

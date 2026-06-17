@@ -63,7 +63,6 @@ public:
         pnh_.param("auto_takeoff", auto_takeoff_, true);
         pnh_.param("control_rate_hz", control_rate_hz_, 200.0);
         pnh_.param("max_target_age_s", max_target_age_s_, 2.0);
-        pnh_.param("post_takeoff_wait_s", post_takeoff_wait_s_, 3.0);
         pnh_.param("max_pwm", max_pwm_, 1.0);
         pnh_.param("min_pwm", min_pwm_, 0.0);
 
@@ -79,10 +78,6 @@ public:
             srv.request.waitOnLastTask = 0;
             if (takeoff_client_.call(srv)) {
                 ROS_INFO("waypoint_pwm_controller: takeoff requested");
-                if (post_takeoff_wait_s_ > 0.0) {
-                    ROS_INFO("waypoint_pwm_controller: waiting %.1fs after takeoff", post_takeoff_wait_s_);
-                    ros::Duration(post_takeoff_wait_s_).sleep();
-                }
             } else {
                 ROS_WARN("waypoint_pwm_controller: takeoff service call failed");
             }
@@ -250,7 +245,6 @@ private:
     bool auto_takeoff_ = true;
     double control_rate_hz_ = 200.0;
     double max_target_age_s_ = 2.0;
-    double post_takeoff_wait_s_ = 3.0;
     double max_pwm_ = 1.0;
     double min_pwm_ = 0.0;
 };

@@ -76,6 +76,8 @@ class DoorFusionTracker:
         self.horizontal_fov_deg = float(rospy.get_param("~horizontal_fov_deg", 60.0))
         self.bbox_margin_px = int(rospy.get_param("~bbox_margin_px", 12))
         self.min_points_in_box = int(rospy.get_param("~min_points_in_box", 8))
+        self.post_neighborhood_xy_m = float(rospy.get_param("~post_neighborhood_xy_m", 10.0))
+        self.post_neighborhood_z_m = float(rospy.get_param("~post_neighborhood_z_m", 10.0))
         self.door_width_m = float(rospy.get_param("~door_width_m", 10.0))
         self.door_width_tolerance_m = float(rospy.get_param("~door_width_tolerance_m", 4.0))
         self.single_door_width_m = float(rospy.get_param("~single_door_width_m", 3.0))
@@ -89,6 +91,7 @@ class DoorFusionTracker:
         self.max_pair_height_ratio = float(rospy.get_param("~max_pair_height_ratio", 1.7))
         self.max_pair_width_ratio = float(rospy.get_param("~max_pair_width_ratio", 1.8))
         self.max_pair_y_center_diff_ratio = float(rospy.get_param("~max_pair_y_center_diff_ratio", 0.45))
+        self.waypoint_z_offset_m = float(rospy.get_param("~waypoint_z_offset_m", 5.0))
         self.approach_distance_m = float(rospy.get_param("~approach_distance_m", 2.0))
         self.pass_distance_m = float(rospy.get_param("~pass_distance_m", 2.0))
         self.track_timeout_s = float(rospy.get_param("~track_timeout_s", 8.0))
@@ -231,8 +234,8 @@ class DoorFusionTracker:
         yolo_box_points = []
         candidate_pairs = []
         for left_det, right_det in image_pairs:
-            left_post, left_points = self.estimate_post(left_det, projected)
-            right_post, right_points = self.estimate_post(right_det, projected)
+            left_post, left_points = self.estimate_post(left_det, projected, cloud_world)
+            right_post, right_points = self.estimate_post(right_det, projected, cloud_world)
             yolo_box_points.extend(left_points)
             yolo_box_points.extend(right_points)
             if left_post is None or right_post is None:
@@ -288,7 +291,7 @@ class DoorFusionTracker:
         idx = np.where(valid)[0]
         return [(float(u[i]), float(v[i]), cloud_world[i], float(depth[i])) for i in idx]
 
-    def estimate_post(self, det, projected):
+    def estimate_post(self, det, projected, cloud_world):
         x1, y1, x2, y2 = det["bbox"]
         x1 -= self.bbox_margin_px
         y1 -= self.bbox_margin_px
@@ -305,12 +308,36 @@ class DoorFusionTracker:
         if not self.valid_single_door_cloud(pts, depths):
             return None, pts
 
+        seed = np.median(pts, axis=0)
+        neighborhood = self.post_neighborhood_points(seed, cloud_world)
+        if neighborhood.shape[0] >= self.min_points_in_box:
+            pts = neighborhood
+
         median = np.median(pts, axis=0)
         dist = np.linalg.norm(pts - median, axis=1)
         keep = pts[dist < np.percentile(dist, 70)]
         if keep.shape[0] >= self.min_points_in_box:
             return np.median(keep, axis=0), keep
         return median, pts
+
+    def post_neighborhood_points(self, seed, cloud_world):
+        if cloud_world.shape[0] == 0:
+            return np.empty((0, 3), dtype=np.float64)
+        half_xy = 0.5 * self.post_neighborhood_xy_m
+        half_z = 0.5 * self.post_neighborhood_z_m
+        delta = cloud_world - seed
+        mask = (
+            (np.abs(delta[:, 0]) <= half_xy) &
+            (np.abs(delta[:, 1]) <= half_xy) &
+            (np.abs(delta[:, 2]) <= half_z)
+        )
+        points = cloud_world[mask]
+        if points.shape[0] < self.min_points_in_box:
+            return points
+        median = np.median(points, axis=0)
+        dist = np.linalg.norm(points - median, axis=1)
+        keep = dist < np.percentile(dist, 85)
+        return points[keep]
 
     def select_foreground_points(self, box_samples):
         pts = np.asarray([p for p, _ in box_samples], dtype=np.float64)
@@ -523,10 +550,54 @@ class DoorFusionTracker:
             odom.pose.pose.position.y,
             odom.pose.pose.position.z,
         ], dtype=np.float64))
-        ordered = sorted(candidates, key=lambda t: np.linalg.norm(t.center - drone_world))
+        forward_world = self.drone_forward_world(odom)
+        ahead = []
+        behind = []
+        for track in candidates:
+            rel = track.center - drone_world
+            forward_dist = float(np.dot(rel, forward_world))
+            lateral_dist = float(np.linalg.norm(rel - forward_dist * forward_world))
+            item = (forward_dist, lateral_dist, track)
+            if forward_dist > -2.0:
+                ahead.append(item)
+            else:
+                behind.append(item)
+        ordered_items = sorted(ahead, key=lambda item: (max(0.0, item[0]), item[1]))
+        if len(ordered_items) < 2:
+            ordered_items.extend(sorted(behind, key=lambda item: (abs(item[0]), item[1])))
+        ordered = [item[2] for item in ordered_items]
         current = ordered[0]
         next_track = ordered[1] if len(ordered) > 1 else None
         return current, next_track
+
+    @staticmethod
+    def drone_forward_world(odom):
+        q = np.array([
+            odom.pose.pose.orientation.x,
+            odom.pose.pose.orientation.y,
+            odom.pose.pose.orientation.z,
+            odom.pose.pose.orientation.w,
+        ], dtype=np.float64)
+        norm = np.linalg.norm(q)
+        if norm < 1e-9:
+            return np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        q = q / norm
+        qx, qy, qz, qw = q
+        # Rotate NED/body x-forward unit vector by q, then convert NED vector to world.
+        tx = 0.0
+        ty = 2.0 * qz
+        tz = -2.0 * qy
+        forward_ned = np.array([
+            1.0 + qy * tz - qz * ty,
+            qw * ty + qz * tx - qx * tz,
+            qw * tz + qx * ty - qy * tx,
+        ], dtype=np.float64)
+        forward_world = np.array([forward_ned[0], -forward_ned[1], -forward_ned[2]], dtype=np.float64)
+        forward_world[2] = 0.0
+        norm = np.linalg.norm(forward_world)
+        if norm < 1e-9:
+            return np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        return forward_world / norm
 
     def refine_tracks_with_cloud(self, cloud_world, odom, stamp):
         stamp_sec = stamp.to_sec() if not stamp.is_zero() else rospy.Time.now().to_sec()
@@ -564,16 +635,21 @@ class DoorFusionTracker:
     def make_waypoints(self, track, odom):
         if track.center is None:
             return []
-        return [track.center.copy()]
+        return [self.waypoint_from_track(track)]
 
-    @staticmethod
-    def control_waypoints(current_track, next_track):
+    def waypoint_from_track(self, track):
+        waypoint = track.center.copy()
+        waypoint[2] += self.waypoint_z_offset_m
+        return waypoint
+
+    def control_waypoints(self, current_track, next_track):
         waypoints = []
         if current_track is not None and current_track.center is not None:
-            waypoints.append(current_track.center.copy())
+            waypoints.append(self.waypoint_from_track(current_track))
         if next_track is not None and next_track.center is not None:
-            if not waypoints or np.linalg.norm(next_track.center - waypoints[-1]) > 0.5:
-                waypoints.append(next_track.center.copy())
+            next_waypoint = self.waypoint_from_track(next_track)
+            if not waypoints or np.linalg.norm(next_waypoint - waypoints[-1]) > 0.5:
+                waypoints.append(next_waypoint)
         return waypoints
 
     def publish_path(self, waypoints, stamp):
@@ -628,8 +704,15 @@ class DoorFusionTracker:
         if track.right_post is not None:
             anchors.append(track.right_post)
         mask = np.zeros(cloud_world.shape[0], dtype=bool)
+        half_xy = 0.5 * self.post_neighborhood_xy_m
+        half_z = 0.5 * self.post_neighborhood_z_m
         for anchor in anchors:
-            mask |= np.linalg.norm(cloud_world - anchor, axis=1) < self.track_cloud_radius_m
+            delta = cloud_world - anchor
+            mask |= (
+                (np.abs(delta[:, 0]) <= half_xy) &
+                (np.abs(delta[:, 1]) <= half_xy) &
+                (np.abs(delta[:, 2]) <= half_z)
+            )
         points = cloud_world[mask]
         if points.shape[0] > 0:
             track.cloud_points = points

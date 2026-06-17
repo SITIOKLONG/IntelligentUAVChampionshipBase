@@ -12,14 +12,26 @@
         <param name="input_path_topic" value="/door_waypoint_detector/waypoints_world"/>
         <param name="odom_topic" value="/eskf_odom"/>
         <param name="reached_threshold_m" value="$(arg reached_threshold_m)"/>
+        <param name="path_update_match_tolerance_m" value="6.0"/>
+        <param name="fallback_extension_m" value="8.0"/>
+        <param name="align_after_reached_s" value="0.1"/>
+        <param name="search_yaw_deg" value="45.0"/>
+        <param name="search_sweep_period_s" value="3.0"/>
     </node>
-    <node pkg="drone_control" type="waypoint_pwm_controller" name="waypoint_pwm_controller" output="screen">
+    <node pkg="drone_control" type="waypoint_vel_controller" name="waypoint_vel_controller" output="screen">
         <param name="auto_takeoff" value="$(arg auto_takeoff)"/>
         <param name="odom_topic" value="/eskf_odom"/>
         <param name="target_topic" value="/my_drone/current_waypoint"/>
-        <param name="pwm_topic" value="/airsim_node/drone_1/rotor_pwm_cmd"/>
-        <param name="control_rate_hz" value="200.0"/>
+        <param name="cmd_topic" value="/airsim_node/drone_1/vel_body_cmd"/>
+        <param name="control_rate_hz" value="30.0"/>
         <param name="max_target_age_s" value="2.0"/>
-        <param name="post_takeoff_wait_s" value="3.0"/>
+        <param name="startup_forward_s" value="3.0"/>
+        <param name="startup_forward_vx" value="2.0"/>
+        <param name="kp_xy" value="0.45"/>
+        <param name="kp_z" value="0.6"/>
+        <param name="kp_yaw" value="90.0"/>
+        <param name="max_xy_speed" value="4.0"/>
+        <param name="max_z_speed" value="2.0"/>
+        <param name="max_yaw_rate" value="30.0"/>
     </node>
 </launch>

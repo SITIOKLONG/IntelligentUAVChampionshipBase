@@ -42,7 +42,7 @@ private:
     float m_Kpvy = 0.5;
     float m_last_e_vy = 0;
     float m_max_acc = 20;
-    float m_max_v = 20;
+    float m_max_v = 5; //20
     float m_max_ang = 0.5;
     float m_last_thetad = 0;
 };

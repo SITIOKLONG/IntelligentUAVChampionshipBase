@@ -1,0 +1,17 @@
+{
+  "source_weights": "/home/rl/jacksit/rmua1/IntelligentUAVChampionshipBase/drone_ws/src/navigation_vision/yolov8/rmua_v1.pt",
+  "onnx": "/home/rl/jacksit/rmua1/IntelligentUAVChampionshipBase/drone_ws/src/navigation_vision/yolov8/rmua_v1_640_fp16.onnx",
+  "classes": {
+    "0": "left_door",
+    "1": "right_door"
+  },
+  "imgsz": 640,
+  "batch": 1,
+  "dynamic": false,
+  "fp16": true,
+  "exported_with_cuda": false,
+  "simplified": false,
+  "opset": 12,
+  "runtime": "onnxruntime-gpu",
+  "input_layout": "NCHW RGB normalized 0..1"
+}
