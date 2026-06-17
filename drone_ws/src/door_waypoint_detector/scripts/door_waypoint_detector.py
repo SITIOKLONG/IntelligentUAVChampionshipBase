@@ -86,11 +86,6 @@ class DoorFusionTracker:
         self.single_door_depth_tolerance_m = float(rospy.get_param("~single_door_depth_tolerance_m", 2.5))
         self.single_door_height_m = float(rospy.get_param("~single_door_height_m", 10.0))
         self.single_door_height_tolerance_m = float(rospy.get_param("~single_door_height_tolerance_m", 5.0))
-        self.min_post_bbox_aspect = float(rospy.get_param("~min_post_bbox_aspect", 0.25))
-        self.max_post_bbox_aspect = float(rospy.get_param("~max_post_bbox_aspect", 0.8))
-        self.max_pair_height_ratio = float(rospy.get_param("~max_pair_height_ratio", 1.7))
-        self.max_pair_width_ratio = float(rospy.get_param("~max_pair_width_ratio", 1.8))
-        self.max_pair_y_center_diff_ratio = float(rospy.get_param("~max_pair_y_center_diff_ratio", 0.45))
         self.waypoint_z_offset_m = float(rospy.get_param("~waypoint_z_offset_m", 5.0))
         self.approach_distance_m = float(rospy.get_param("~approach_distance_m", 2.0))
         self.pass_distance_m = float(rospy.get_param("~pass_distance_m", 2.0))
@@ -383,11 +378,7 @@ class DoorFusionTracker:
         return True
 
     def valid_post_bbox(self, bbox):
-        x1, y1, x2, y2 = bbox
-        w = max(1.0, x2 - x1)
-        h = max(1.0, y2 - y1)
-        aspect = w / h
-        return self.min_post_bbox_aspect <= aspect <= self.max_post_bbox_aspect
+        return True
 
     def select_valid_image_pairs(self, detections):
         left = [d for d in detections if d["class_id"] == 0]
@@ -446,12 +437,6 @@ class DoorFusionTracker:
         right_cy = 0.5 * (ry1 + ry2)
 
         if left_cx >= right_cx:
-            return False
-        if max(lh, rh) / min(lh, rh) > self.max_pair_height_ratio:
-            return False
-        if max(lw, rw) / min(lw, rw) > self.max_pair_width_ratio:
-            return False
-        if abs(left_cy - right_cy) > self.max_pair_y_center_diff_ratio * max(lh, rh):
             return False
         if right_cx - left_cx < 0.5 * (lw + rw):
             return False

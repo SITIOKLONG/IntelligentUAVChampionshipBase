@@ -35,6 +35,7 @@ std::string world_frame_id = "world";
 bool aligning = false;
 ros::Time align_until;
 geometry_msgs::PoseStamped align_target;
+bool align_then_search = false;
 bool searching_next_door = false;
 ros::Time search_started;
 geometry_msgs::Point search_hold_position;
@@ -274,11 +275,24 @@ void beginAlignBeforeNext(const geometry_msgs::Point& hold_position, const tf2::
 
 void beginSearchForNextDoor(const geometry_msgs::Point& hold_position, const tf2::Vector3& base_direction)
 {
-    aligning = false;
     searching_next_door = true;
     search_started = ros::Time::now();
     search_hold_position = hold_position;
     search_base_direction = base_direction.length2() < 1e-6 ? droneForwardWorld() : base_direction.normalized();
+}
+
+void beginAlignThenSearchForNextDoor(const geometry_msgs::Point& hold_position, const tf2::Vector3& base_direction)
+{
+    search_hold_position = hold_position;
+    search_base_direction = base_direction.length2() < 1e-6 ? droneForwardWorld() : base_direction.normalized();
+    searching_next_door = false;
+    align_then_search = align_after_reached_s > 0.0;
+
+    if (align_then_search) {
+        beginAlignBeforeNext(hold_position, search_base_direction);
+    } else {
+        beginSearchForNextDoor(hold_position, search_base_direction);
+    }
 }
 
 void odomCb(const nav_msgs::Odometry::ConstPtr& msg)
@@ -343,6 +357,7 @@ void pathCb(const nav_msgs::Path::ConstPtr& msg)
     }
 
     updateWaypointOrientations();
+    align_then_search = false;
     searching_next_door = false;
     publishPath();
     publishCurrentWaypoint();
@@ -371,6 +386,7 @@ bool clearWaypointsCb(std_srvs::Empty::Request&, std_srvs::Empty::Response&)
     reached_waypoints.clear();
     current_index = 0;
     aligning = false;
+    align_then_search = false;
     searching_next_door = false;
     publishPath();
     return true;
@@ -393,6 +409,12 @@ void timerCb(const ros::TimerEvent&)
     if (aligning) {
         if (ros::Time::now() >= align_until) {
             aligning = false;
+            if (align_then_search) {
+                align_then_search = false;
+                beginSearchForNextDoor(search_hold_position, search_base_direction);
+                publishCurrentWaypoint();
+                return;
+            }
         } else {
             publishCurrentWaypoint();
             return;
@@ -423,10 +445,10 @@ void timerCb(const ros::TimerEvent&)
         if (current_index > 0) {
             search_direction = normalizedDirection(waypoints[current_index - 1].pose.position, reached_position);
         }
-        beginSearchForNextDoor(reached_position, search_direction);
+        beginAlignThenSearchForNextDoor(reached_position, search_direction);
         ROS_WARN_THROTTLE(
             1.0,
-            "my_drone: no next door yet; holding waypoint and searching +/-%.1f deg",
+            "my_drone: no next door yet; aligning then searching +/-%.1f deg",
             search_yaw_deg);
     }
 

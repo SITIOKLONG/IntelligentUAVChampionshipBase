@@ -19,11 +19,13 @@ class PointcloudPreprocessor:
     def __init__(self):
         self.lock = threading.Lock()
         self.latest_stereo = None
+        self.latest_back_stereo = None
         self.latest_lidar = None
         self.latest_odom = None
         self.latest_stamp = rospy.Time(0)
 
         self.stereo_cloud_topic = rospy.get_param("~stereo_cloud_topic", "/stereo_depth/front/points")
+        self.back_stereo_cloud_topic = rospy.get_param("~back_stereo_cloud_topic", "")
         self.lidar_cloud_topic = rospy.get_param("~lidar_cloud_topic", "")
         self.odom_topic = rospy.get_param("~odom_topic", "/eskf_odom")
         self.output_topic = rospy.get_param("~output_topic", "/door_waypoint_detector/preprocessed_cloud_world")
@@ -35,6 +37,13 @@ class PointcloudPreprocessor:
 
         self.pub = rospy.Publisher(self.output_topic, PointCloud2, queue_size=1)
         self.stereo_sub = rospy.Subscriber(self.stereo_cloud_topic, PointCloud2, self.stereo_callback, queue_size=1)
+        self.back_stereo_sub = None
+        if self.back_stereo_cloud_topic:
+            self.back_stereo_sub = rospy.Subscriber(
+                self.back_stereo_cloud_topic,
+                PointCloud2,
+                self.back_stereo_callback,
+                queue_size=1)
         self.odom_sub = rospy.Subscriber(self.odom_topic, Odometry, self.odom_callback, queue_size=1)
         self.lidar_sub = None
         if self.lidar_cloud_topic:
@@ -42,8 +51,9 @@ class PointcloudPreprocessor:
 
         self.timer = rospy.Timer(rospy.Duration(1.0 / max(self.publish_rate_hz, 1.0)), self.timer_callback)
         rospy.loginfo(
-            "pointcloud_preprocessor: stereo=%s lidar=%s odom=%s output=%s open3d=%s voxel=%.2f",
+            "pointcloud_preprocessor: stereo=%s back_stereo=%s lidar=%s odom=%s output=%s open3d=%s voxel=%.2f",
             self.stereo_cloud_topic,
+            self.back_stereo_cloud_topic or "disabled",
             self.lidar_cloud_topic or "disabled",
             self.odom_topic,
             self.output_topic,
@@ -52,6 +62,9 @@ class PointcloudPreprocessor:
 
     def stereo_callback(self, msg):
         self.store_cloud(msg, "stereo")
+
+    def back_stereo_callback(self, msg):
+        self.store_cloud(msg, "back_stereo")
 
     def lidar_callback(self, msg):
         self.store_cloud(msg, "lidar")
@@ -69,6 +82,8 @@ class PointcloudPreprocessor:
         with self.lock:
             if source == "stereo":
                 self.latest_stereo = cloud
+            elif source == "back_stereo":
+                self.latest_back_stereo = cloud
             else:
                 self.latest_lidar = cloud
             self.latest_stamp = msg.header.stamp
@@ -107,10 +122,11 @@ class PointcloudPreprocessor:
     def timer_callback(self, _event):
         with self.lock:
             stereo = None if self.latest_stereo is None else self.latest_stereo.copy()
+            back_stereo = None if self.latest_back_stereo is None else self.latest_back_stereo.copy()
             lidar = None if self.latest_lidar is None else self.latest_lidar.copy()
             stamp = self.latest_stamp
 
-        clouds = [c for c in (stereo, lidar) if c is not None and c.shape[0] > 0]
+        clouds = [c for c in (stereo, back_stereo, lidar) if c is not None and c.shape[0] > 0]
         if not clouds:
             return
         points = np.vstack(clouds)

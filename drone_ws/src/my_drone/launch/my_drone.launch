@@ -14,9 +14,9 @@
         <param name="reached_threshold_m" value="$(arg reached_threshold_m)"/>
         <param name="path_update_match_tolerance_m" value="6.0"/>
         <param name="fallback_extension_m" value="8.0"/>
-        <param name="align_after_reached_s" value="0.1"/>
+        <param name="align_after_reached_s" value="1.0"/>
         <param name="search_yaw_deg" value="45.0"/>
-        <param name="search_sweep_period_s" value="3.0"/>
+        <param name="search_sweep_period_s" value="5.0"/>
     </node>
     <node pkg="drone_control" type="waypoint_vel_controller" name="waypoint_vel_controller" output="screen">
         <param name="auto_takeoff" value="$(arg auto_takeoff)"/>
@@ -27,11 +27,11 @@
         <param name="max_target_age_s" value="2.0"/>
         <param name="startup_forward_s" value="3.0"/>
         <param name="startup_forward_vx" value="2.0"/>
-        <param name="kp_xy" value="0.45"/>
-        <param name="kp_z" value="0.6"/>
-        <param name="kp_yaw" value="90.0"/>
-        <param name="max_xy_speed" value="4.0"/>
-        <param name="max_z_speed" value="2.0"/>
-        <param name="max_yaw_rate" value="30.0"/>
+        <param name="kp_xy" value="0.2"/>
+        <param name="kp_z" value="0.3"/>
+        <param name="kp_yaw" value="30.0"/>
+        <param name="max_xy_speed" value="999.0"/>
+        <param name="max_z_speed" value="999.0"/>
+        <param name="max_yaw_rate" value="999.0"/>
     </node>
 </launch>

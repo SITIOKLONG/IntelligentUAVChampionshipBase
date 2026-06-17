@@ -2,21 +2,25 @@
   <arg name="model_path" default="/drone_ws/src/navigation_vision/yolov8/rmua_v2.pt"/>
   <arg name="image_topic" default="/airsim_node/drone_1/front_left/Scene"/>
   <arg name="stereo_cloud_topic" default="/stereo_depth/front/points"/>
+  <arg name="back_stereo_cloud_topic" default="/stereo_depth/back/points"/>
   <arg name="odom_topic" default="/eskf_odom"/>
 
   <node pkg="door_waypoint_detector" type="yolo_door_detector.py" name="yolo_door_detector" output="screen">
     <param name="model_path" value="$(arg model_path)"/>
     <param name="image_topic" value="$(arg image_topic)"/>
     <param name="detections_topic" value="/door_waypoint_detector/yolo_detections"/>
-    <param name="debug_image_topic" value="/door_waypoint_detector/yolo_debug_image"/>
-    <param name="confidence_threshold" value="0.4"/>
+    <param name="debug_image_topic" value="/door_waypoint_detector/debug_image"/>
+    <param name="confidence_threshold" value="0.5"/>
     <param name="nms_iou_threshold" value="0.45"/>
     <param name="model_input_size" value="640"/>
-    <param name="publish_debug_image" value="false"/>
+    <param name="publish_debug_image" value="true"/>
+    <param name="imshow_raw_detection" value="false"/>
+    <param name="imshow_window_name" value="yolo_raw_detection"/>
   </node>
 
   <node pkg="door_waypoint_detector" type="pointcloud_preprocessor.py" name="pointcloud_preprocessor" output="screen">
     <param name="stereo_cloud_topic" value="$(arg stereo_cloud_topic)"/>
+    <param name="back_stereo_cloud_topic" value="$(arg back_stereo_cloud_topic)"/>
     <param name="lidar_cloud_topic" value="/airsim_node/drone_1/lidar"/>
     <param name="odom_topic" value="$(arg odom_topic)"/>
     <rosparam param="lidar_offset_body">[0.0, 0.0, -0.05]</rosparam>
@@ -33,7 +37,7 @@
     <param name="preprocessed_cloud_topic" value="/door_waypoint_detector/preprocessed_cloud_world"/>
     <param name="detections_topic" value="/door_waypoint_detector/yolo_detections"/>
     <param name="odom_topic" value="$(arg odom_topic)"/>
-    <param name="annotated_image_topic" value="/door_waypoint_detector/debug_image"/>
+    <param name="annotated_image_topic" value="/door_waypoint_detector/fusion_debug_image"/>
     <param name="marker_topic" value="/door_waypoint_detector/markers_world"/>
     <param name="yolo_box_cloud_topic" value="/door_waypoint_detector/yolo_box_points_world"/>
     <param name="current_door_cloud_topic" value="/door_waypoint_detector/current_door_points_world"/>
@@ -46,22 +50,17 @@
     <param name="horizontal_fov_deg" value="60.0"/>
     <param name="bbox_margin_px" value="12"/>
     <param name="min_points_in_box" value="8"/>
-    <param name="post_neighborhood_xy_m" value="3.0"/>
-    <param name="post_neighborhood_z_m" value="3.0"/>
+    <param name="post_neighborhood_xy_m" value="4.0"/>
+    <param name="post_neighborhood_z_m" value="9.0"/>
     <param name="door_width_m" value="10.0"/>
     <param name="door_width_tolerance_m" value="3.0"/>
     <param name="single_door_width_m" value="3.0"/>
-    <param name="single_door_width_tolerance_m" value="2.5"/>
+    <param name="single_door_width_tolerance_m" value="1.5"/>
     <param name="single_door_depth_m" value="3.0"/>
-    <param name="single_door_depth_tolerance_m" value="2.5"/>
+    <param name="single_door_depth_tolerance_m" value="1.5"/>
     <param name="single_door_height_m" value="10.0"/>
     <param name="single_door_height_tolerance_m" value="6.0"/>
-    <param name="min_post_bbox_aspect" value="0.25"/>
-    <param name="max_post_bbox_aspect" value="0.8"/>
-    <param name="max_pair_height_ratio" value="1.7"/>
-    <param name="max_pair_width_ratio" value="1.8"/>
-    <param name="max_pair_y_center_diff_ratio" value="0.45"/>
-    <param name="waypoint_z_offset_m" value="5.0"/>
+    <param name="waypoint_z_offset_m" value="1.0"/>
     <param name="approach_distance_m" value="2.0"/>
     <param name="pass_distance_m" value="2.0"/>
     <param name="track_timeout_s" value="20.0"/>
