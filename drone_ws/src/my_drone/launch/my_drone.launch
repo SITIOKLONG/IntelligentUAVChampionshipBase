@@ -28,8 +28,8 @@
         <param name="startup_forward_s" value="3.0"/>
         <param name="startup_forward_vx" value="2.0"/>
         <param name="kp_xy" value="0.2"/>
-        <param name="kp_z" value="0.3"/>
-        <param name="kp_yaw" value="30.0"/>
+        <param name="kp_z" value="0.6"/>
+        <param name="kp_yaw" value="20.0"/>
         <param name="max_xy_speed" value="999.0"/>
         <param name="max_z_speed" value="999.0"/>
         <param name="max_yaw_rate" value="999.0"/>

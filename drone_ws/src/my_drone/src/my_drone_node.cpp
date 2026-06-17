@@ -144,12 +144,21 @@ geometry_msgs::Quaternion orientationFacingDirection(const tf2::Vector3& directi
     return out;
 }
 
+bool hasValidOrientation(const geometry_msgs::Quaternion& q)
+{
+    const double norm2 = q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z;
+    return norm2 > 1e-12;
+}
+
 void updateWaypointOrientations()
 {
     if (waypoints.empty()) {
         return;
     }
     for (std::size_t i = 0; i < waypoints.size(); ++i) {
+        if (hasValidOrientation(waypoints[i].pose.orientation)) {
+            continue;
+        }
         tf2::Vector3 direction = droneForwardWorld();
         if (i + 1 < waypoints.size()) {
             direction = normalizedDirection(waypoints[i].pose.position, waypoints[i + 1].pose.position);
@@ -206,10 +215,7 @@ void publishPath()
     path.poses = waypoints;
     for (auto& pose : path.poses) {
         pose.header = path.header;
-        if (std::abs(pose.pose.orientation.w) < 1e-12 &&
-            std::abs(pose.pose.orientation.x) < 1e-12 &&
-            std::abs(pose.pose.orientation.y) < 1e-12 &&
-            std::abs(pose.pose.orientation.z) < 1e-12) {
+        if (!hasValidOrientation(pose.pose.orientation)) {
             pose.pose.orientation.w = 1.0;
         }
     }
@@ -250,10 +256,7 @@ void publishCurrentWaypoint()
     geometry_msgs::PoseStamped target = waypoints[current_index];
     target.header.stamp = ros::Time::now();
     target.header.frame_id = world_frame_id;
-    if (std::abs(target.pose.orientation.w) < 1e-12 &&
-        std::abs(target.pose.orientation.x) < 1e-12 &&
-        std::abs(target.pose.orientation.y) < 1e-12 &&
-        std::abs(target.pose.orientation.z) < 1e-12) {
+    if (!hasValidOrientation(target.pose.orientation)) {
         target.pose.orientation.w = 1.0;
     }
     current_waypoint_pub.publish(target);
@@ -368,10 +371,7 @@ void addWaypointCb(const geometry_msgs::PoseStamped::ConstPtr& msg)
     geometry_msgs::PoseStamped wp = *msg;
     wp.header.frame_id = world_frame_id;
     wp.header.stamp = ros::Time::now();
-    if (std::abs(wp.pose.orientation.w) < 1e-12 &&
-        std::abs(wp.pose.orientation.x) < 1e-12 &&
-        std::abs(wp.pose.orientation.y) < 1e-12 &&
-        std::abs(wp.pose.orientation.z) < 1e-12) {
+    if (!hasValidOrientation(wp.pose.orientation)) {
         wp.pose.orientation.w = 1.0;
     }
     waypoints.push_back(wp);

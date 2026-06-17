@@ -11,7 +11,7 @@
     <param name="detections_topic" value="/door_waypoint_detector/yolo_detections"/>
     <param name="debug_image_topic" value="/door_waypoint_detector/debug_image"/>
     <param name="confidence_threshold" value="0.5"/>
-    <param name="nms_iou_threshold" value="0.45"/>
+    <param name="nms_iou_threshold" value="0.8"/>
     <param name="model_input_size" value="640"/>
     <param name="publish_debug_image" value="true"/>
     <param name="imshow_raw_detection" value="false"/>
@@ -51,23 +51,38 @@
     <param name="bbox_margin_px" value="12"/>
     <param name="min_points_in_box" value="8"/>
     <param name="post_neighborhood_xy_m" value="4.0"/>
-    <param name="post_neighborhood_z_m" value="9.0"/>
+    <param name="post_neighborhood_z_m" value="10.0"/>
+    <param name="post_cluster_radius_m" value="0.8"/>
+    <param name="post_cluster_max_points" value="400"/>
     <param name="door_width_m" value="10.0"/>
-    <param name="door_width_tolerance_m" value="3.0"/>
+    <param name="door_width_tolerance_m" value="4.0"/>
     <param name="single_door_width_m" value="3.0"/>
     <param name="single_door_width_tolerance_m" value="1.5"/>
     <param name="single_door_depth_m" value="3.0"/>
     <param name="single_door_depth_tolerance_m" value="1.5"/>
     <param name="single_door_height_m" value="10.0"/>
     <param name="single_door_height_tolerance_m" value="6.0"/>
-    <param name="waypoint_z_offset_m" value="1.0"/>
+    <param name="waypoint_z_offset_m" value="0.0"/>
+    <param name="corridor_min_side_points" value="2"/>
+    <param name="corridor_direction_max_change_deg" value="40.0"/>
+    <param name="corridor_cloud_tube_radius_m" value="1.0"/>
+    <param name="corridor_cloud_min_points" value="12"/>
+    <param name="corridor_edge_min_distance_m" value="8.0"/>
+    <param name="corridor_edge_max_distance_m" value="22.0"/>
+    <param name="corridor_edge_expected_distance_m" value="15.0"/>
+    <param name="corridor_edge_max_pca_angle_deg" value="35.0"/>
     <param name="approach_distance_m" value="2.0"/>
     <param name="pass_distance_m" value="2.0"/>
-    <param name="track_timeout_s" value="20.0"/>
+    <param name="track_timeout_s" value="45.0"/>
     <param name="track_merge_distance_m" value="3.0"/>
-    <param name="min_door_spacing_m" value="15.0"/>
+    <param name="min_door_spacing_m" value="8.0"/>
+    <param name="virtual_next_waypoint_distance_m" value="0.0"/>
     <param name="min_track_seen" value="1"/>
-    <param name="point_refine_radius_m" value="1.2"/>
+    <param name="point_refine_radius_m" value="3.5"/>
+    <param name="point_refine_cluster_radius_m" value="0.8"/>
+    <param name="point_refine_cluster_max_points" value="1500"/>
+    <param name="track_cloud_keepalive_radius_m" value="6.0"/>
+    <param name="track_cloud_keepalive_min_points" value="8"/>
     <param name="track_cloud_radius_m" value="2.0"/>
   </node>
 </launch>
