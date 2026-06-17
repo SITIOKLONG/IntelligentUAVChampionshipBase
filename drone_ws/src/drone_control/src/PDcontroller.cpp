@@ -1,5 +1,7 @@
-#include "PDcontroller.hpp"
-#include <iostream>
+#include "drone_control/PDcontroller.hpp"
+
+#include <algorithm>
+#include <cmath>
 
 Eigen::Vector4f UAVLinearController::execute(Eigen::VectorXf& X_des, Eigen::VectorXf& X_real)
 {
@@ -40,14 +42,6 @@ Eigen::Vector4f UAVLinearController::execute(Eigen::VectorXf& X_des, Eigen::Vect
     float torquey = std::min<float>(2, m_Iyy * (m_Kptheta * cur_e_theta + m_Kdtheta * (cur_e_theta - m_last_e_theta)));
     torquey = std::max<float>(-2, torquey);
     m_last_e_theta = cur_e_theta;
-    std::cout<<m_cnt<<", des z: "<<X_des[2]<<" , real z: "<< X_real[2]<<std::endl;
-    std::cout<<m_cnt<<", des x: "<<X_des[0]<<" , real x: "<< X_real[0]<<
-        ", des vx: "<< vxd<<", real vx: "<<X_real[3]<<", des ax: "<<axd <<", des thata: "<<thetad<<", real theta: "<<X_real[7]
-        <<", ty: "<<torquey<< std::endl;
-    std::cout<<m_cnt<<", des y: "<<X_des[1]<<" , real y: "<< X_real[1]<<
-        ", des vy: "<< vyd<<", real vy: "<<X_real[4]<<", des ay: "<<ayd <<", des phi: "<< phid<<", real phi: "<<X_real[6]
-        <<", tx: "<<torquex<< std::endl;
-
     m_cnt ++;
     float cur_e_psi = X_des[8] - X_real[8];
     float torquez = m_Izz * (m_Kppsi *  cur_e_psi + m_Kdpsi * (cur_e_psi - m_last_e_psi));

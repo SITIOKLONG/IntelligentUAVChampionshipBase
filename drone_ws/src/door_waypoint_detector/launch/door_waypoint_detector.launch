@@ -1,0 +1,71 @@
+<launch>
+  <arg name="model_path" default="/drone_ws/src/navigation_vision/yolov8/rmua_v2.pt"/>
+  <arg name="image_topic" default="/airsim_node/drone_1/front_left/Scene"/>
+  <arg name="stereo_cloud_topic" default="/stereo_depth/front/points"/>
+  <arg name="odom_topic" default="/eskf_odom"/>
+
+  <node pkg="door_waypoint_detector" type="yolo_door_detector.py" name="yolo_door_detector" output="screen">
+    <param name="model_path" value="$(arg model_path)"/>
+    <param name="image_topic" value="$(arg image_topic)"/>
+    <param name="detections_topic" value="/door_waypoint_detector/yolo_detections"/>
+    <param name="debug_image_topic" value="/door_waypoint_detector/yolo_debug_image"/>
+    <param name="confidence_threshold" value="0.6"/>
+    <param name="nms_iou_threshold" value="0.45"/>
+    <param name="model_input_size" value="640"/>
+    <param name="publish_debug_image" value="false"/>
+  </node>
+
+  <node pkg="door_waypoint_detector" type="pointcloud_preprocessor.py" name="pointcloud_preprocessor" output="screen">
+    <param name="stereo_cloud_topic" value="$(arg stereo_cloud_topic)"/>
+    <param name="lidar_cloud_topic" value="/airsim_node/drone_1/lidar"/>
+    <param name="odom_topic" value="$(arg odom_topic)"/>
+    <rosparam param="lidar_offset_body">[0.0, 0.0, -0.05]</rosparam>
+    <param name="output_topic" value="/door_waypoint_detector/preprocessed_cloud_world"/>
+    <param name="max_input_points" value="30000"/>
+    <param name="random_sample_points" value="12000"/>
+    <param name="voxel_size" value="0.18"/>
+    <param name="publish_rate_hz" value="30.0"/>
+  </node>
+
+  <node pkg="door_waypoint_detector" type="door_fusion_tracker.py" name="door_fusion_tracker" output="screen">
+    <param name="use_external_pipeline" value="true"/>
+    <param name="image_topic" value="$(arg image_topic)"/>
+    <param name="preprocessed_cloud_topic" value="/door_waypoint_detector/preprocessed_cloud_world"/>
+    <param name="detections_topic" value="/door_waypoint_detector/yolo_detections"/>
+    <param name="odom_topic" value="$(arg odom_topic)"/>
+    <param name="annotated_image_topic" value="/door_waypoint_detector/debug_image"/>
+    <param name="marker_topic" value="/door_waypoint_detector/markers_world"/>
+    <param name="yolo_box_cloud_topic" value="/door_waypoint_detector/yolo_box_points_world"/>
+    <param name="current_door_cloud_topic" value="/door_waypoint_detector/current_door_points_world"/>
+    <param name="next_door_cloud_topic" value="/door_waypoint_detector/next_door_points_world"/>
+    <param name="waypoint_path_topic" value="/door_waypoint_detector/waypoints_world"/>
+    <param name="next_waypoint_topic" value="/door_waypoint_detector/next_waypoint_world"/>
+    <param name="image_queue_size" value="1"/>
+    <param name="image_width" value="960"/>
+    <param name="image_height" value="720"/>
+    <param name="horizontal_fov_deg" value="60.0"/>
+    <param name="bbox_margin_px" value="12"/>
+    <param name="min_points_in_box" value="8"/>
+    <param name="door_width_m" value="10.0"/>
+    <param name="door_width_tolerance_m" value="3.0"/>
+    <param name="single_door_width_m" value="3.0"/>
+    <param name="single_door_width_tolerance_m" value="2.5"/>
+    <param name="single_door_depth_m" value="3.0"/>
+    <param name="single_door_depth_tolerance_m" value="2.5"/>
+    <param name="single_door_height_m" value="10.0"/>
+    <param name="single_door_height_tolerance_m" value="6.0"/>
+    <param name="min_post_bbox_aspect" value="0.25"/>
+    <param name="max_post_bbox_aspect" value="0.8"/>
+    <param name="max_pair_height_ratio" value="1.7"/>
+    <param name="max_pair_width_ratio" value="1.8"/>
+    <param name="max_pair_y_center_diff_ratio" value="0.45"/>
+    <param name="approach_distance_m" value="2.0"/>
+    <param name="pass_distance_m" value="2.0"/>
+    <param name="track_timeout_s" value="20.0"/>
+    <param name="track_merge_distance_m" value="3.0"/>
+    <param name="min_door_spacing_m" value="15.0"/>
+    <param name="min_track_seen" value="1"/>
+    <param name="point_refine_radius_m" value="1.2"/>
+    <param name="track_cloud_radius_m" value="2.0"/>
+  </node>
+</launch>

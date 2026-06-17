@@ -1,16 +1,25 @@
 <launch>
     <arg name="auto_takeoff" default="true"/>
-    <arg name="speed" default="1.5"/>
-    <arg name="yaw_rate" default="25.0"/>
+    <arg name="reached_threshold_m" default="5.0"/>
 
     <node pkg="imu_gps_odometry" type="imu_gps_odometry" name="imu_gps_odometry" output="screen"/>
     <!-- <node pkg="controller_test" type="controller_test" name="controller_test" output="screen"/> -->
 
     <node pkg="debug" type="debug_node" name="debug_node" output="screen"/>
     <include file="$(find stereo_depth)/launch/stereo_depth.launch"/>
+    <include file="$(find door_waypoint_detector)/launch/door_waypoint_detector.launch"/>
     <node pkg="my_drone" type="my_drone_node" name="my_drone_node" output="screen">
+        <param name="input_path_topic" value="/door_waypoint_detector/waypoints_world"/>
+        <param name="odom_topic" value="/eskf_odom"/>
+        <param name="reached_threshold_m" value="$(arg reached_threshold_m)"/>
+    </node>
+    <node pkg="drone_control" type="waypoint_pwm_controller" name="waypoint_pwm_controller" output="screen">
         <param name="auto_takeoff" value="$(arg auto_takeoff)"/>
-        <param name="speed" value="$(arg speed)"/>
-        <param name="yaw_rate" value="$(arg yaw_rate)"/>
+        <param name="odom_topic" value="/eskf_odom"/>
+        <param name="target_topic" value="/my_drone/current_waypoint"/>
+        <param name="pwm_topic" value="/airsim_node/drone_1/rotor_pwm_cmd"/>
+        <param name="control_rate_hz" value="200.0"/>
+        <param name="max_target_age_s" value="2.0"/>
+        <param name="post_takeoff_wait_s" value="3.0"/>
     </node>
 </launch>

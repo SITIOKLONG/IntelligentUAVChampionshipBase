@@ -1,143 +1,172 @@
 #include <ros/ros.h>
 
-#include <airsim_ros/Takeoff.h>
-#include <airsim_ros/VelCmd.h>
 #include <geometry_msgs/PoseStamped.h>
-#include <geometry_msgs/Twist.h>
+#include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
 #include <std_srvs/Empty.h>
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
-#include <string>
-#include <termios.h>
-#include <unistd.h>
 #include <vector>
 
 namespace
 {
-constexpr const char* kControlFrame = "control_map";
-
-geometry_msgs::Twist latest_manual_cmd;
-ros::Time latest_manual_cmd_time;
-bool has_manual_cmd = false;
-
 std::vector<geometry_msgs::PoseStamped> waypoints;
-nav_msgs::Path waypoint_path;
-ros::Publisher waypoint_pub;
+std::size_t current_index = 0;
+nav_msgs::Odometry latest_odom;
+bool has_odom = false;
 
-double clampValue(double value, double min_value, double max_value)
+ros::Publisher waypoint_path_pub;
+ros::Publisher current_waypoint_pub;
+
+double reached_threshold_m = 5.0;
+std::string world_frame_id = "world";
+
+geometry_msgs::Point nedToWorld(const geometry_msgs::Point& ned)
 {
-    return std::max(min_value, std::min(max_value, value));
+    geometry_msgs::Point world;
+    world.x = ned.x;
+    world.y = -ned.y;
+    world.z = -ned.z;
+    return world;
 }
 
-class KeyboardReader
+double distance3d(const geometry_msgs::Point& a, const geometry_msgs::Point& b)
 {
-public:
-    KeyboardReader() : enabled_(isatty(STDIN_FILENO) == 1)
-    {
-        if (!enabled_) {
-            return;
+    const double dx = a.x - b.x;
+    const double dy = a.y - b.y;
+    const double dz = a.z - b.z;
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+bool samePoint(const geometry_msgs::Point& a, const geometry_msgs::Point& b, double tolerance)
+{
+    return distance3d(a, b) <= tolerance;
+}
+
+void publishPath()
+{
+    nav_msgs::Path path;
+    path.header.stamp = ros::Time::now();
+    path.header.frame_id = world_frame_id;
+    path.poses = waypoints;
+    for (auto& pose : path.poses) {
+        pose.header = path.header;
+        if (std::abs(pose.pose.orientation.w) < 1e-12 &&
+            std::abs(pose.pose.orientation.x) < 1e-12 &&
+            std::abs(pose.pose.orientation.y) < 1e-12 &&
+            std::abs(pose.pose.orientation.z) < 1e-12) {
+            pose.pose.orientation.w = 1.0;
         }
+    }
+    waypoint_path_pub.publish(path);
+}
 
-        tcgetattr(STDIN_FILENO, &old_termios_);
-        termios raw = old_termios_;
-        raw.c_lflag &= static_cast<unsigned int>(~(ICANON | ECHO));
-        raw.c_cc[VMIN] = 0;
-        raw.c_cc[VTIME] = 0;
-        tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+void publishCurrentWaypoint()
+{
+    if (waypoints.empty()) {
+        return;
     }
 
-    ~KeyboardReader()
-    {
-        if (enabled_) {
-            tcsetattr(STDIN_FILENO, TCSANOW, &old_termios_);
+    current_index = std::min(current_index, waypoints.size() - 1);
+    geometry_msgs::PoseStamped target = waypoints[current_index];
+    target.header.stamp = ros::Time::now();
+    target.header.frame_id = world_frame_id;
+    if (std::abs(target.pose.orientation.w) < 1e-12 &&
+        std::abs(target.pose.orientation.x) < 1e-12 &&
+        std::abs(target.pose.orientation.y) < 1e-12 &&
+        std::abs(target.pose.orientation.z) < 1e-12) {
+        target.pose.orientation.w = 1.0;
+    }
+    current_waypoint_pub.publish(target);
+}
+
+void odomCb(const nav_msgs::Odometry::ConstPtr& msg)
+{
+    latest_odom = *msg;
+    has_odom = true;
+}
+
+void pathCb(const nav_msgs::Path::ConstPtr& msg)
+{
+    if (msg->poses.empty()) {
+        return;
+    }
+
+    geometry_msgs::Point old_target;
+    const bool had_target = !waypoints.empty() && current_index < waypoints.size();
+    if (had_target) {
+        old_target = waypoints[current_index].pose.position;
+    }
+
+    waypoints = msg->poses;
+    for (auto& pose : waypoints) {
+        pose.header.frame_id = world_frame_id;
+    }
+
+    if (!had_target) {
+        current_index = 0;
+    } else if (current_index >= waypoints.size() ||
+               !samePoint(old_target, waypoints[current_index].pose.position, 2.0)) {
+        current_index = 0;
+        double best_distance = distance3d(old_target, waypoints.front().pose.position);
+        for (std::size_t i = 1; i < waypoints.size(); ++i) {
+            const double d = distance3d(old_target, waypoints[i].pose.position);
+            if (d < best_distance) {
+                best_distance = d;
+                current_index = i;
+            }
         }
     }
 
-    bool enabled() const
-    {
-        return enabled_;
-    }
-
-    bool read(char& key)
-    {
-        if (!enabled_) {
-            return false;
-        }
-        return ::read(STDIN_FILENO, &key, 1) == 1;
-    }
-
-private:
-    bool enabled_;
-    termios old_termios_;
-};
-
-void printKeyboardHelp()
-{
-    ROS_INFO(
-        "[manual] keys: w/s x forward/back, a/d y left/right, r/f z up/down, "
-        "q/e yaw left/right, +/- speed, space hover, x hard stop");
-}
-
-void fillHoverCommand(airsim_ros::VelCmd& cmd, bool hard_stop)
-{
-    cmd.vx = 0.0;
-    cmd.vy = 0.0;
-    cmd.vz = 0.0;
-    cmd.yawRate = 0.0;
-    cmd.va = 4;
-    cmd.stop = hard_stop ? 1 : 0;
-}
-
-void manualCmdCb(const geometry_msgs::Twist::ConstPtr& msg)
-{
-    latest_manual_cmd = *msg;
-    latest_manual_cmd_time = ros::Time::now();
-    has_manual_cmd = true;
-}
-
-void publishWaypoints()
-{
-    waypoint_path.header.stamp = ros::Time::now();
-    waypoint_path.header.frame_id = kControlFrame;
-    waypoint_path.poses = waypoints;
-    waypoint_pub.publish(waypoint_path);
+    publishPath();
+    publishCurrentWaypoint();
 }
 
 void addWaypointCb(const geometry_msgs::PoseStamped::ConstPtr& msg)
 {
     geometry_msgs::PoseStamped wp = *msg;
+    wp.header.frame_id = world_frame_id;
     wp.header.stamp = ros::Time::now();
-    if (wp.header.frame_id.empty()) {
-        wp.header.frame_id = kControlFrame;
-    }
-    if (std::abs(wp.pose.orientation.x) < 1e-12 &&
+    if (std::abs(wp.pose.orientation.w) < 1e-12 &&
+        std::abs(wp.pose.orientation.x) < 1e-12 &&
         std::abs(wp.pose.orientation.y) < 1e-12 &&
-        std::abs(wp.pose.orientation.z) < 1e-12 &&
-        std::abs(wp.pose.orientation.w) < 1e-12) {
+        std::abs(wp.pose.orientation.z) < 1e-12) {
         wp.pose.orientation.w = 1.0;
     }
-
     waypoints.push_back(wp);
-    publishWaypoints();
-    ROS_INFO(
-        "[manual] added waypoint #%zu: x=%.2f y=%.2f z=%.2f",
-        waypoints.size(),
-        wp.pose.position.x,
-        wp.pose.position.y,
-        wp.pose.position.z);
+    publishPath();
+    publishCurrentWaypoint();
 }
 
 bool clearWaypointsCb(std_srvs::Empty::Request&, std_srvs::Empty::Response&)
 {
     waypoints.clear();
-    publishWaypoints();
-    ROS_INFO("[manual] cleared waypoints");
+    current_index = 0;
+    publishPath();
     return true;
 }
 
+void timerCb(const ros::TimerEvent&)
+{
+    if (!has_odom || waypoints.empty()) {
+        return;
+    }
+
+    current_index = std::min(current_index, waypoints.size() - 1);
+    const geometry_msgs::Point current_world = nedToWorld(latest_odom.pose.pose.position);
+    const double distance = distance3d(current_world, waypoints[current_index].pose.position);
+
+    if (distance < reached_threshold_m && current_index + 1 < waypoints.size()) {
+        ++current_index;
+        ROS_INFO(
+            "my_drone: reached waypoint, switching to #%zu/%zu",
+            current_index + 1,
+            waypoints.size());
+    }
+
+    publishCurrentWaypoint();
+}
 }  // namespace
 
 int main(int argc, char** argv)
@@ -146,121 +175,28 @@ int main(int argc, char** argv)
     ros::NodeHandle nh;
     ros::NodeHandle pnh("~");
 
-    double speed = 1.5;
-    double yaw_rate = 25.0;
-    double speed_step = 0.5;
-    double max_speed = 6.0;
-    double manual_cmd_timeout = 0.5;
-    bool auto_takeoff = true;
+    std::string input_path_topic;
+    std::string odom_topic;
+    pnh.param<std::string>("input_path_topic", input_path_topic, "/door_waypoint_detector/waypoints_world");
+    pnh.param<std::string>("odom_topic", odom_topic, "/eskf_odom");
+    pnh.param("reached_threshold_m", reached_threshold_m, 5.0);
+    pnh.param<std::string>("world_frame_id", world_frame_id, "world");
 
-    pnh.param("speed", speed, speed);
-    pnh.param("yaw_rate", yaw_rate, yaw_rate);
-    pnh.param("speed_step", speed_step, speed_step);
-    pnh.param("max_speed", max_speed, max_speed);
-    pnh.param("manual_cmd_timeout", manual_cmd_timeout, manual_cmd_timeout);
-    pnh.param("auto_takeoff", auto_takeoff, auto_takeoff);
+    waypoint_path_pub = nh.advertise<nav_msgs::Path>("/my_drone/waypoints", 1, true);
+    current_waypoint_pub = nh.advertise<geometry_msgs::PoseStamped>("/my_drone/current_waypoint", 1, true);
 
-    ros::Subscriber manual_cmd_sub =
-        nh.subscribe("/my_drone/manual_cmd", 10, manualCmdCb);
-    ros::Subscriber add_waypoint_sub =
-        nh.subscribe("/my_drone/add_waypoint", 10, addWaypointCb);
-    ros::ServiceServer clear_waypoints_srv =
-        nh.advertiseService("/my_drone/clear_waypoints", clearWaypointsCb);
+    ros::Subscriber path_sub = nh.subscribe(input_path_topic, 1, pathCb);
+    ros::Subscriber odom_sub = nh.subscribe(odom_topic, 1, odomCb);
+    ros::Subscriber add_waypoint_sub = nh.subscribe("/my_drone/add_waypoint", 10, addWaypointCb);
+    ros::ServiceServer clear_waypoints_srv = nh.advertiseService("/my_drone/clear_waypoints", clearWaypointsCb);
+    ros::Timer timer = nh.createTimer(ros::Duration(0.05), timerCb);
 
-    waypoint_pub =
-        nh.advertise<nav_msgs::Path>("/my_drone/waypoints", 1, true);
-    ros::Publisher vel_pub =
-        nh.advertise<airsim_ros::VelCmd>("/airsim_node/drone_1/vel_body_cmd", 10);
+    ROS_INFO(
+        "my_drone: path=%s odom=%s threshold=%.2fm",
+        input_path_topic.c_str(),
+        odom_topic.c_str(),
+        reached_threshold_m);
 
-    if (auto_takeoff) {
-        ros::ServiceClient takeoff_client =
-            nh.serviceClient<airsim_ros::Takeoff>("/airsim_node/drone_1/takeoff");
-        ROS_INFO("[manual] waiting for takeoff service...");
-        takeoff_client.waitForExistence();
-
-        airsim_ros::Takeoff takeoff_srv;
-        takeoff_srv.request.waitOnLastTask = 0;
-        if (takeoff_client.call(takeoff_srv)) {
-            ROS_INFO("[manual] takeoff command sent");
-        } else {
-            ROS_WARN("[manual] takeoff service call failed; continuing");
-        }
-    }
-
-    KeyboardReader keyboard;
-    if (keyboard.enabled()) {
-        printKeyboardHelp();
-    } else {
-        ROS_WARN("[manual] no TTY keyboard; use /my_drone/manual_cmd Twist topic");
-    }
-
-    publishWaypoints();
-
-    airsim_ros::VelCmd keyboard_cmd;
-    fillHoverCommand(keyboard_cmd, false);
-
-    ros::Rate rate(30);
-    while (ros::ok()) {
-        ros::spinOnce();
-
-        char key = 0;
-        while (keyboard.read(key)) {
-            key = static_cast<char>(
-                std::tolower(static_cast<unsigned char>(key)));
-
-            fillHoverCommand(keyboard_cmd, false);
-            keyboard_cmd.va = 5;
-
-            if (key == 'w') {
-                keyboard_cmd.vx = speed;
-            } else if (key == 's') {
-                keyboard_cmd.vx = -speed;
-            } else if (key == 'a') {
-                keyboard_cmd.vy = -speed;
-            } else if (key == 'd') {
-                keyboard_cmd.vy = speed;
-            } else if (key == 'r') {
-                keyboard_cmd.vz = speed;
-            } else if (key == 'f') {
-                keyboard_cmd.vz = -speed;
-            } else if (key == 'q') {
-                keyboard_cmd.yawRate = -yaw_rate;
-            } else if (key == 'e') {
-                keyboard_cmd.yawRate = yaw_rate;
-            } else if (key == '+') {
-                speed = clampValue(speed + speed_step, 0.0, max_speed);
-                ROS_INFO("[manual] speed %.2f", speed);
-            } else if (key == '-') {
-                speed = clampValue(speed - speed_step, 0.0, max_speed);
-                ROS_INFO("[manual] speed %.2f", speed);
-            } else if (key == ' ') {
-                fillHoverCommand(keyboard_cmd, false);
-            } else if (key == 'x') {
-                fillHoverCommand(keyboard_cmd, true);
-            } else if (key == 'h') {
-                printKeyboardHelp();
-            }
-        }
-
-        airsim_ros::VelCmd cmd = keyboard_cmd;
-        if (has_manual_cmd &&
-            (ros::Time::now() - latest_manual_cmd_time).toSec() < manual_cmd_timeout) {
-            cmd.header.stamp = ros::Time::now();
-            cmd.header.frame_id = "body";
-            cmd.vx = latest_manual_cmd.linear.x;
-            cmd.vy = latest_manual_cmd.linear.y;
-            cmd.vz = latest_manual_cmd.linear.z;
-            cmd.yawRate = latest_manual_cmd.angular.z;
-            cmd.va = 5;
-            cmd.stop = 0;
-        } else {
-            cmd.header.stamp = ros::Time::now();
-            cmd.header.frame_id = "body";
-        }
-
-        vel_pub.publish(cmd);
-        rate.sleep();
-    }
-
+    ros::spin();
     return 0;
 }

@@ -1,4 +1,12 @@
-basic_dev/build/*
-basic_dev/devel/*
+*/build/
+*/devel/
+*/logs/
 *.zip
 drone_ws/src/navigation_vision/yolov8/images/*
+
+*/.catkin_tools/
+*.tar.gz
+*.pyc
+
+*.engine
+*.onnx
