@@ -27,6 +27,9 @@ class PointcloudPreprocessor:
         self.stereo_cloud_topic = rospy.get_param("~stereo_cloud_topic", "/stereo_depth/front/points")
         self.back_stereo_cloud_topic = rospy.get_param("~back_stereo_cloud_topic", "")
         self.lidar_cloud_topic = rospy.get_param("~lidar_cloud_topic", "")
+        self.use_stereo_cloud = bool(rospy.get_param("~use_stereo_cloud", True))
+        self.use_back_stereo_cloud = bool(rospy.get_param("~use_back_stereo_cloud", True))
+        self.use_lidar_cloud = bool(rospy.get_param("~use_lidar_cloud", True))
         self.odom_topic = rospy.get_param("~odom_topic", "/eskf_odom")
         self.output_topic = rospy.get_param("~output_topic", "/door_waypoint_detector/preprocessed_cloud_world")
         self.max_input_points = int(rospy.get_param("~max_input_points", 30000))
@@ -36,9 +39,11 @@ class PointcloudPreprocessor:
         self.lidar_offset_body = np.asarray(rospy.get_param("~lidar_offset_body", [0.0, 0.0, -0.05]), dtype=np.float64)
 
         self.pub = rospy.Publisher(self.output_topic, PointCloud2, queue_size=1)
-        self.stereo_sub = rospy.Subscriber(self.stereo_cloud_topic, PointCloud2, self.stereo_callback, queue_size=1)
+        self.stereo_sub = None
+        if self.use_stereo_cloud and self.stereo_cloud_topic:
+            self.stereo_sub = rospy.Subscriber(self.stereo_cloud_topic, PointCloud2, self.stereo_callback, queue_size=1)
         self.back_stereo_sub = None
-        if self.back_stereo_cloud_topic:
+        if self.use_back_stereo_cloud and self.back_stereo_cloud_topic:
             self.back_stereo_sub = rospy.Subscriber(
                 self.back_stereo_cloud_topic,
                 PointCloud2,
@@ -46,15 +51,15 @@ class PointcloudPreprocessor:
                 queue_size=1)
         self.odom_sub = rospy.Subscriber(self.odom_topic, Odometry, self.odom_callback, queue_size=1)
         self.lidar_sub = None
-        if self.lidar_cloud_topic:
+        if self.use_lidar_cloud and self.lidar_cloud_topic:
             self.lidar_sub = rospy.Subscriber(self.lidar_cloud_topic, PointCloud2, self.lidar_callback, queue_size=1)
 
         self.timer = rospy.Timer(rospy.Duration(1.0 / max(self.publish_rate_hz, 1.0)), self.timer_callback)
         rospy.loginfo(
             "pointcloud_preprocessor: stereo=%s back_stereo=%s lidar=%s odom=%s output=%s open3d=%s voxel=%.2f",
-            self.stereo_cloud_topic,
-            self.back_stereo_cloud_topic or "disabled",
-            self.lidar_cloud_topic or "disabled",
+            self.stereo_cloud_topic if self.use_stereo_cloud else "disabled",
+            self.back_stereo_cloud_topic if self.use_back_stereo_cloud and self.back_stereo_cloud_topic else "disabled",
+            self.lidar_cloud_topic if self.use_lidar_cloud and self.lidar_cloud_topic else "disabled",
             self.odom_topic,
             self.output_topic,
             o3d is not None,

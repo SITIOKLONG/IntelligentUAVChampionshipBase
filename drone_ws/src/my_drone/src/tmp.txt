@@ -1,1 +1,0 @@
-rostopic pub -1 /my_drone/add_waypoint geometry_msgs/PoseStamped "{header: {frame_id: control_map}, pose: {position: {x: 65.0, y: 0.0, z: 4.3}, orientation: {w: 1.0}}}"

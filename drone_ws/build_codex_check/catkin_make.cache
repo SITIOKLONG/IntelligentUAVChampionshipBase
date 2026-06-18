@@ -1,0 +1,2 @@
+airsim_ros:my_drone
+-DCATKIN_DEVEL_PREFIX=/drone_ws/devel_codex_check -DCMAKE_INSTALL_PREFIX=/drone_ws/install -DCATKIN_WHITELIST_PACKAGES=airsim_ros;my_drone -G Unix Makefiles

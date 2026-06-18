@@ -115,6 +115,7 @@ class DoorFusionTracker:
         self.yolo_box_cloud_topic = rospy.get_param("~yolo_box_cloud_topic", "/door_waypoint_detector/yolo_box_points_world")
         self.current_door_cloud_topic = rospy.get_param("~current_door_cloud_topic", "/door_waypoint_detector/current_door_points_world")
         self.next_door_cloud_topic = rospy.get_param("~next_door_cloud_topic", "/door_waypoint_detector/next_door_points_world")
+        self.corridor_cluster_cloud_topic = rospy.get_param("~corridor_cluster_cloud_topic", "/door_waypoint_detector/corridor_pca_cluster_points_world")
         self.waypoint_path_topic = rospy.get_param("~waypoint_path_topic", "/door_waypoint_detector/waypoints_world")
         self.next_waypoint_topic = rospy.get_param("~next_waypoint_topic", "/door_waypoint_detector/next_waypoint_world")
 
@@ -139,11 +140,23 @@ class DoorFusionTracker:
         self.corridor_min_side_points = int(rospy.get_param("~corridor_min_side_points", 2))
         self.corridor_direction_max_change_deg = float(rospy.get_param("~corridor_direction_max_change_deg", 40.0))
         self.corridor_cloud_tube_radius_m = float(rospy.get_param("~corridor_cloud_tube_radius_m", 1.0))
+        self.corridor_cloud_search_radius_m = float(rospy.get_param("~corridor_cloud_search_radius_m", 3.0))
+        self.corridor_cloud_cluster_radius_m = float(rospy.get_param("~corridor_cloud_cluster_radius_m", 1.0))
+        self.corridor_cloud_cluster_max_points = int(rospy.get_param("~corridor_cloud_cluster_max_points", 2000))
+        self.corridor_pca_cluster_extend_m = float(rospy.get_param("~corridor_pca_cluster_extend_m", 3.0))
+        self.corridor_pca_cluster_include_radius_m = float(rospy.get_param("~corridor_pca_cluster_include_radius_m", 0.6))
         self.corridor_cloud_min_points = int(rospy.get_param("~corridor_cloud_min_points", 12))
         self.corridor_edge_min_distance_m = float(rospy.get_param("~corridor_edge_min_distance_m", 8.0))
         self.corridor_edge_max_distance_m = float(rospy.get_param("~corridor_edge_max_distance_m", 22.0))
         self.corridor_edge_expected_distance_m = float(rospy.get_param("~corridor_edge_expected_distance_m", 15.0))
         self.corridor_edge_max_pca_angle_deg = float(rospy.get_param("~corridor_edge_max_pca_angle_deg", 35.0))
+        self.corridor_memory_back_distance_m = float(rospy.get_param(
+            "~corridor_memory_back_distance_m",
+            self.corridor_edge_expected_distance_m))
+        self.corridor_memory_max_age_s = float(rospy.get_param("~corridor_memory_max_age_s", 30.0))
+        self.corridor_pca_smoothing_alpha = float(rospy.get_param("~corridor_pca_smoothing_alpha", 0.2))
+        self.corridor_lookahead_distance_m = float(rospy.get_param("~corridor_lookahead_distance_m", 6.0))
+        self.corridor_center_anchor_alpha = float(rospy.get_param("~corridor_center_anchor_alpha", 0.8))
         self.approach_distance_m = float(rospy.get_param("~approach_distance_m", 2.0))
         self.pass_distance_m = float(rospy.get_param("~pass_distance_m", 2.0))
         self.track_timeout_s = float(rospy.get_param("~track_timeout_s", 8.0))
@@ -170,6 +183,16 @@ class DoorFusionTracker:
         self.latest_image = None
         self.latest_debug_stamp = rospy.Time(0)
         self.latest_debug_state = ([], None, None, set())
+        self.latest_corridor_cluster_points = np.empty((0, 3), dtype=np.float64)
+        self.tracked_corridor_clusters = {
+            "left": np.empty((0, 3), dtype=np.float64),
+            "right": np.empty((0, 3), dtype=np.float64),
+        }
+        self.tracked_corridor_models = {
+            "left": None,
+            "right": None,
+        }
+        self.last_corridor_cluster_update = rospy.Time(0)
         self.tracks = []
         self.next_track_id = 1
         self.corridor_direction = None
@@ -179,6 +202,7 @@ class DoorFusionTracker:
         self.yolo_box_cloud_pub = rospy.Publisher(self.yolo_box_cloud_topic, PointCloud2, queue_size=1)
         self.current_door_cloud_pub = rospy.Publisher(self.current_door_cloud_topic, PointCloud2, queue_size=1)
         self.next_door_cloud_pub = rospy.Publisher(self.next_door_cloud_topic, PointCloud2, queue_size=1)
+        self.corridor_cluster_cloud_pub = rospy.Publisher(self.corridor_cluster_cloud_topic, PointCloud2, queue_size=1)
         self.path_pub = rospy.Publisher(self.waypoint_path_topic, Path, queue_size=1, latch=True)
         self.next_waypoint_pub = rospy.Publisher(self.next_waypoint_topic, PoseStamped, queue_size=1, latch=True)
 
@@ -1174,22 +1198,76 @@ class DoorFusionTracker:
         center_segments = []
         left_segments = []
         right_segments = []
+        cluster_debug_points = []
         edges = self.corridor_cloud_edges(ordered, cloud_world)
         if not edges:
-            return center_segments, left_segments, right_segments
+            tracked_segments = self.tracked_corridor_marker_segments()
+            self.latest_corridor_cluster_points = self.tracked_corridor_cluster_points()
+            return tracked_segments
         for edge in edges:
             left_segment = edge["left"]["segment"] if edge["left"] is not None else None
             right_segment = edge["right"]["segment"] if edge["right"] is not None else None
             if left_segment is not None:
+                left_segment = self.extended_marker_segment_from_evidence(edge["left"])
                 left_segments.extend(left_segment)
+                cluster_debug_points.append(edge["left"]["cluster"])
             if right_segment is not None:
+                right_segment = self.extended_marker_segment_from_evidence(edge["right"])
                 right_segments.extend(right_segment)
+                cluster_debug_points.append(edge["right"]["cluster"])
             if left_segment is not None and right_segment is not None:
                 center_segments.extend([
                     0.5 * (left_segment[0] + right_segment[0]),
                     0.5 * (left_segment[1] + right_segment[1]),
                 ])
+        if cluster_debug_points:
+            tracked = self.tracked_corridor_cluster_points()
+            if tracked.shape[0] > 0:
+                cluster_debug_points.append(tracked)
+            self.latest_corridor_cluster_points = np.vstack(cluster_debug_points)
+        else:
+            self.latest_corridor_cluster_points = self.tracked_corridor_cluster_points()
         return center_segments, left_segments, right_segments
+
+    def tracked_corridor_marker_segments(self):
+        left_cluster = self.tracked_corridor_clusters["left"]
+        right_cluster = self.tracked_corridor_clusters["right"]
+        if left_cluster.shape[0] < self.corridor_cloud_min_points or right_cluster.shape[0] < self.corridor_cloud_min_points:
+            return [], [], []
+        left_anchor = np.mean(left_cluster, axis=0)
+        right_anchor = np.mean(right_cluster, axis=0)
+        reference = self.corridor_direction if self.corridor_direction is not None else np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        left_model = self.extended_side_segment_from_cluster(
+            left_cluster,
+            left_anchor,
+            reference,
+            self.virtual_next_waypoint_distance_m)
+        right_model = self.extended_side_segment_from_cluster(
+            right_cluster,
+            right_anchor,
+            reference,
+            self.virtual_next_waypoint_distance_m)
+        if left_model is None or right_model is None:
+            return [], [], []
+        left_points = [left_model["start"], left_model["end"]]
+        right_points = [right_model["start"], right_model["end"]]
+        center_points = [
+            0.5 * (left_model["start"] + right_model["start"]),
+            0.5 * (left_model["end"] + right_model["end"]),
+        ]
+        return center_points, left_points, right_points
+
+    def extended_marker_segment_from_evidence(self, evidence):
+        segment = evidence["segment"]
+        reference = segment[1] - segment[0]
+        model = self.extended_side_segment_from_cluster(
+            evidence["cluster"],
+            segment[0],
+            reference,
+            self.virtual_next_waypoint_distance_m)
+        if model is None:
+            return segment
+        return [model["start"], model["end"]]
 
     def side_corridor_cloud_segment(self, current, next_track, side, cloud_world):
         p0 = current.left_post if side == "left" else current.right_post
@@ -1211,40 +1289,146 @@ class DoorFusionTracker:
         reference_norm = np.linalg.norm(reference)
         if reference_norm < 1e-9:
             return None
-        points = self.points_near_segment(cloud_world, p0, p1, self.corridor_cloud_tube_radius_m)
+        points, distance_to_segment = self.points_near_segment_with_distances(
+            cloud_world,
+            p0,
+            p1,
+            max(self.corridor_cloud_search_radius_m, self.corridor_cloud_tube_radius_m))
         if points.shape[0] < self.corridor_cloud_min_points:
             return None
-        direction = self.pca_direction(points)
-        if direction is None:
-            return None
+
         reference = reference / reference_norm
-        alignment = abs(float(np.dot(direction, reference)))
         min_alignment = math.cos(math.radians(self.corridor_edge_max_pca_angle_deg))
-        if alignment < min_alignment:
+
+        if points.shape[0] > self.corridor_cloud_cluster_max_points:
+            order = np.argsort(distance_to_segment)
+            points = points[order[:self.corridor_cloud_cluster_max_points]]
+
+        best = self.best_corridor_side_cluster(points, reference, min_alignment)
+        if best is None:
             return None
-        segment = self.pca_segment_from_points(points, p1 - p0)
+
+        cluster, direction, alignment = best
+        refined_cluster = self.refine_corridor_cluster_along_pca(cluster, cloud_world, reference)
+        if refined_cluster.shape[0] >= cluster.shape[0]:
+            refined_direction = self.pca_direction(refined_cluster)
+            if refined_direction is not None:
+                refined_alignment = abs(float(np.dot(refined_direction, reference)))
+                if refined_alignment >= min_alignment:
+                    cluster = refined_cluster
+                    direction = refined_direction
+                    alignment = refined_alignment
+        segment = self.pca_segment_from_points(cluster, p1 - p0)
         if segment is None:
-            return None
+            segment = [p0, p1]
         return {
             "segment": segment,
-            "count": int(points.shape[0]),
+            "cluster": cluster,
+            "count": int(cluster.shape[0]),
             "alignment": alignment,
         }
 
+    def refine_corridor_cluster_along_pca(self, cluster, cloud_world, reference):
+        if cluster.shape[0] < self.corridor_cloud_min_points or cloud_world.shape[0] == 0:
+            return cluster
+        direction = self.pca_direction(cluster)
+        if direction is None:
+            return cluster
+        direction[2] = 0.0
+        norm = np.linalg.norm(direction)
+        if norm < 1e-9:
+            return cluster
+        direction = self.align_direction(direction / norm, reference)
+
+        centroid = np.mean(cluster, axis=0)
+        projection = np.dot(cluster - centroid, direction)
+        start = centroid + direction * (float(np.min(projection)) - self.corridor_pca_cluster_extend_m)
+        end = centroid + direction * (float(np.max(projection)) + self.corridor_pca_cluster_extend_m)
+        extra, _distance_to_segment = self.points_near_segment_with_distances(
+            cloud_world,
+            start,
+            end,
+            self.corridor_pca_cluster_include_radius_m)
+        if extra.shape[0] == 0:
+            return cluster
+
+        merged = np.unique(np.vstack((cluster, extra)), axis=0)
+        merged = self.connected_cluster_near_seed(
+            merged,
+            centroid,
+            self.corridor_cloud_cluster_radius_m,
+            self.corridor_cloud_cluster_max_points)
+        if merged.shape[0] > self.corridor_cloud_cluster_max_points:
+            order = np.argsort(np.linalg.norm(merged - centroid, axis=1))
+            merged = merged[order[:self.corridor_cloud_cluster_max_points]]
+        return merged
+
     @staticmethod
     def points_near_segment(cloud_world, p0, p1, radius):
+        points, _distances = DoorFusionTracker.points_near_segment_with_distances(cloud_world, p0, p1, radius)
+        return points
+
+    @staticmethod
+    def points_near_segment_with_distances(cloud_world, p0, p1, radius):
         if cloud_world.shape[0] == 0:
-            return np.empty((0, 3), dtype=np.float64)
+            return np.empty((0, 3), dtype=np.float64), np.empty((0,), dtype=np.float64)
         direction = p1 - p0
         length_sq = float(np.dot(direction, direction))
         if length_sq < 1e-9:
-            return np.empty((0, 3), dtype=np.float64)
+            return np.empty((0, 3), dtype=np.float64), np.empty((0,), dtype=np.float64)
         rel = cloud_world - p0
         t = np.dot(rel, direction) / length_sq
         mask_t = (t >= 0.0) & (t <= 1.0)
         closest = p0 + np.outer(np.clip(t, 0.0, 1.0), direction)
         dist = np.linalg.norm(cloud_world - closest, axis=1)
-        return cloud_world[mask_t & (dist <= radius)]
+        mask = mask_t & (dist <= radius)
+        return cloud_world[mask], dist[mask]
+
+    def best_corridor_side_cluster(self, points, reference, min_alignment):
+        clusters = self.euclidean_clusters(points, self.corridor_cloud_cluster_radius_m)
+        best = None
+        best_score = None
+        for cluster in clusters:
+            if cluster.shape[0] < self.corridor_cloud_min_points:
+                continue
+            direction = self.pca_direction(cluster)
+            if direction is None:
+                continue
+            alignment = abs(float(np.dot(direction, reference)))
+            if alignment < min_alignment:
+                continue
+            projection = np.dot(cluster - np.mean(cluster, axis=0), direction)
+            span = float(np.max(projection) - np.min(projection)) if projection.size else 0.0
+            score = float(cluster.shape[0]) + 20.0 * alignment + 0.5 * span
+            if best_score is None or score > best_score:
+                best = (cluster, direction, alignment)
+                best_score = score
+        return best
+
+    @staticmethod
+    def euclidean_clusters(points, radius):
+        if points.shape[0] == 0:
+            return []
+        radius_sq = radius * radius
+        visited = np.zeros(points.shape[0], dtype=bool)
+        clusters = []
+        for start_idx in range(points.shape[0]):
+            if visited[start_idx]:
+                continue
+            cluster = []
+            queue = [start_idx]
+            visited[start_idx] = True
+            while queue:
+                idx = queue.pop()
+                cluster.append(idx)
+                delta = points - points[idx]
+                near_idx = np.where(np.einsum("ij,ij->i", delta, delta) <= radius_sq)[0]
+                for next_idx in near_idx:
+                    if not visited[next_idx]:
+                        visited[next_idx] = True
+                        queue.append(int(next_idx))
+            clusters.append(points[np.asarray(cluster, dtype=np.int64)])
+        return clusters
 
     @staticmethod
     def pca_segment_from_points(points, reference_direction):
@@ -1270,6 +1454,257 @@ class DoorFusionTracker:
         waypoint[2] += self.waypoint_z_offset_m
         return waypoint
 
+    def corridor_centerline_from_side_pca(self, current_track, next_track, odom, stamp):
+        if current_track is None or current_track.center is None:
+            return []
+        cloud_world = self.latest_preprocessed_cloud_world.copy()
+
+        ordered = self.ordered_corridor_tracks(stamp)
+        edges = self.corridor_cloud_edges(ordered, cloud_world) if cloud_world.shape[0] > 0 else []
+        edge = self.select_corridor_edge_for_control(edges, current_track, next_track)
+
+        base_direction = self.local_corridor_direction(current_track, odom, stamp)
+        if edge is not None:
+            edge_direction = edge["b"].center - edge["a"].center
+            edge_direction[2] = 0.0
+            if np.linalg.norm(edge_direction) > 1e-9:
+                base_direction = self.align_direction(edge_direction / np.linalg.norm(edge_direction), base_direction)
+            self.update_tracked_corridor_clusters(edge, odom, base_direction, stamp)
+        else:
+            self.prune_tracked_corridor_clusters(odom, base_direction, stamp)
+
+        left_cluster = self.tracked_corridor_clusters["left"]
+        right_cluster = self.tracked_corridor_clusters["right"]
+        if left_cluster.shape[0] < self.corridor_cloud_min_points or right_cluster.shape[0] < self.corridor_cloud_min_points:
+            return []
+
+        left_anchor = current_track.left_post if current_track.left_post is not None else current_track.center
+        right_anchor = current_track.right_post if current_track.right_post is not None else current_track.center
+        extension = self.pass_distance_m if next_track is not None else self.virtual_next_waypoint_distance_m
+        left_model = self.extended_side_segment_from_cluster(left_cluster, left_anchor, base_direction, extension)
+        right_model = self.extended_side_segment_from_cluster(right_cluster, right_anchor, base_direction, extension)
+        if left_model is None or right_model is None:
+            return []
+        left_model = self.smooth_corridor_side_model("left", left_model, base_direction)
+        right_model = self.smooth_corridor_side_model("right", right_model, base_direction)
+
+        forward = np.mean(np.vstack([left_model["direction"], right_model["direction"]]), axis=0)
+        forward[2] = 0.0
+        forward_norm = np.linalg.norm(forward)
+        if forward_norm < 1e-9:
+            return []
+        forward = self.align_direction(forward / forward_norm, base_direction)
+        forward = self.anchor_direction_to_door_chain(forward, current_track, next_track)
+
+        start = 0.5 * (left_model["start"] + right_model["start"])
+        end = 0.5 * (left_model["end"] + right_model["end"])
+        start[2] = current_track.center[2] + self.waypoint_z_offset_m
+        end[2] = current_track.center[2] + self.waypoint_z_offset_m
+        start, end = self.anchor_centerline_to_door_chain(start, end, forward, current_track, next_track)
+        return self.lookahead_centerline_waypoints(start, end, forward, odom, next_track is not None)
+
+    def anchor_direction_to_door_chain(self, forward, current_track, next_track):
+        if next_track is None or next_track.center is None:
+            return forward
+        door_direction = np.array(next_track.center - current_track.center, dtype=np.float64, copy=True)
+        door_direction[2] = 0.0
+        norm = np.linalg.norm(door_direction)
+        if norm < 1e-9:
+            return forward
+        door_direction = self.align_direction(door_direction / norm, forward)
+        alpha = min(max(self.corridor_center_anchor_alpha, 0.0), 1.0)
+        anchored = (1.0 - alpha) * forward + alpha * door_direction
+        anchored[2] = 0.0
+        anchored_norm = np.linalg.norm(anchored)
+        if anchored_norm < 1e-9:
+            return forward
+        return self.align_direction(anchored / anchored_norm, forward)
+
+    def anchor_centerline_to_door_chain(self, start, end, forward, current_track, next_track):
+        anchors = [current_track.center]
+        if next_track is not None and next_track.center is not None:
+            anchors.append(next_track.center)
+        door_center = np.mean(np.vstack(anchors), axis=0)
+        door_center[2] += self.waypoint_z_offset_m
+
+        line_origin = 0.5 * (start + end)
+        projection = float(np.dot(door_center - line_origin, forward))
+        closest = line_origin + forward * projection
+        correction = door_center - closest
+        correction -= forward * float(np.dot(correction, forward))
+        correction[2] = 0.0
+        alpha = min(max(self.corridor_center_anchor_alpha, 0.0), 1.0)
+        start = start + alpha * correction
+        end = end + alpha * correction
+
+        return start, end
+
+    def lookahead_centerline_waypoints(self, start, end, forward, odom, has_next_track):
+        span = float(np.dot(end - start, forward))
+        if span < 0.5:
+            return [(end, forward)]
+        drone_world = ned_to_world(np.array([
+            odom.pose.pose.position.x,
+            odom.pose.pose.position.y,
+            odom.pose.pose.position.z,
+        ], dtype=np.float64))
+        drone_projection = float(np.dot(drone_world - start, forward))
+        lookahead_projection = max(0.0, drone_projection) + self.corridor_lookahead_distance_m
+        if has_next_track:
+            lookahead_projection = min(lookahead_projection, span)
+        target = start + forward * lookahead_projection
+        target[2] = start[2]
+        if has_next_track and np.linalg.norm(end - target) < 0.5:
+            target = end
+        return [(target, forward)]
+
+    def smooth_corridor_side_model(self, side, model, reference_direction):
+        previous = self.tracked_corridor_models.get(side)
+        if previous is None:
+            self.tracked_corridor_models[side] = model
+            return model
+
+        alpha = min(max(self.corridor_pca_smoothing_alpha, 0.0), 1.0)
+        direction = self.align_direction(model["direction"], previous["direction"])
+        smoothed_direction = (1.0 - alpha) * previous["direction"] + alpha * direction
+        smoothed_direction[2] = 0.0
+        norm = np.linalg.norm(smoothed_direction)
+        if norm < 1e-9:
+            smoothed_direction = self.align_direction(direction, reference_direction)
+        else:
+            smoothed_direction = self.align_direction(smoothed_direction / norm, reference_direction)
+
+        previous_center = 0.5 * (previous["start"] + previous["end"])
+        current_center = 0.5 * (model["start"] + model["end"])
+        center = (1.0 - alpha) * previous_center + alpha * current_center
+        previous_length = float(np.linalg.norm(previous["end"] - previous["start"]))
+        current_length = float(np.linalg.norm(model["end"] - model["start"]))
+        length = max((1.0 - alpha) * previous_length + alpha * current_length, 0.5)
+        smoothed = {
+            "start": center - smoothed_direction * (0.5 * length),
+            "end": center + smoothed_direction * (0.5 * length),
+            "direction": smoothed_direction,
+            "cluster": model.get("cluster", np.empty((0, 3), dtype=np.float64)),
+        }
+        self.tracked_corridor_models[side] = smoothed
+        return smoothed
+
+    def update_tracked_corridor_clusters(self, edge, odom, direction, stamp):
+        for side in ("left", "right"):
+            evidence = edge.get(side)
+            if evidence is None or evidence.get("cluster") is None:
+                continue
+            cluster = evidence["cluster"]
+            if cluster.shape[0] == 0:
+                continue
+            existing = self.tracked_corridor_clusters[side]
+            merged = cluster if existing.shape[0] == 0 else np.vstack((existing, cluster))
+            self.tracked_corridor_clusters[side] = self.pruned_corridor_memory_points(merged, odom, direction)
+        self.last_corridor_cluster_update = stamp
+
+    def prune_tracked_corridor_clusters(self, odom, direction, stamp):
+        if self.last_corridor_cluster_update.is_zero():
+            return
+        age = (stamp - self.last_corridor_cluster_update).to_sec()
+        if self.corridor_memory_max_age_s > 0.0 and age > self.corridor_memory_max_age_s:
+            self.tracked_corridor_clusters["left"] = np.empty((0, 3), dtype=np.float64)
+            self.tracked_corridor_clusters["right"] = np.empty((0, 3), dtype=np.float64)
+            self.tracked_corridor_models["left"] = None
+            self.tracked_corridor_models["right"] = None
+            return
+        for side in ("left", "right"):
+            self.tracked_corridor_clusters[side] = self.pruned_corridor_memory_points(
+                self.tracked_corridor_clusters[side],
+                odom,
+                direction)
+            if self.tracked_corridor_clusters[side].shape[0] < self.corridor_cloud_min_points:
+                self.tracked_corridor_models[side] = None
+
+    def pruned_corridor_memory_points(self, points, odom, direction):
+        if points.shape[0] == 0:
+            return points
+        drone_world = ned_to_world(np.array([
+            odom.pose.pose.position.x,
+            odom.pose.pose.position.y,
+            odom.pose.pose.position.z,
+        ], dtype=np.float64))
+        direction = np.array(direction, dtype=np.float64, copy=True)
+        direction[2] = 0.0
+        norm = np.linalg.norm(direction)
+        if norm < 1e-9:
+            return points
+        direction = direction / norm
+        forward = np.dot(points - drone_world, direction)
+        keep = forward >= -self.corridor_memory_back_distance_m
+        kept = points[keep]
+        if kept.shape[0] == 0:
+            return np.empty((0, 3), dtype=np.float64)
+        kept = np.unique(kept, axis=0)
+        centroid = np.mean(kept, axis=0)
+        kept = self.connected_cluster_near_seed(
+            kept,
+            centroid,
+            self.corridor_cloud_cluster_radius_m,
+            self.corridor_cloud_cluster_max_points)
+        if kept.shape[0] > self.corridor_cloud_cluster_max_points:
+            order = np.argsort(np.abs(np.dot(kept - drone_world, direction)))
+            kept = kept[order[:self.corridor_cloud_cluster_max_points]]
+        return kept
+
+    def tracked_corridor_cluster_points(self):
+        clusters = [
+            cluster for cluster in self.tracked_corridor_clusters.values()
+            if cluster.shape[0] > 0
+        ]
+        if not clusters:
+            return np.empty((0, 3), dtype=np.float64)
+        return np.vstack(clusters)
+
+    @staticmethod
+    def select_corridor_edge_for_control(edges, current_track, next_track):
+        candidates = [
+            edge for edge in edges
+            if edge["left"] is not None and edge["right"] is not None
+        ]
+        if not candidates:
+            return None
+        if current_track is not None and next_track is not None:
+            for edge in candidates:
+                if ((edge["a"] is current_track and edge["b"] is next_track) or
+                        (edge["a"] is next_track and edge["b"] is current_track)):
+                    return edge
+        if current_track is not None:
+            current_edges = [
+                edge for edge in candidates
+                if edge["a"] is current_track or edge["b"] is current_track
+            ]
+            if current_edges:
+                return max(current_edges, key=lambda item: item["score"])
+        return max(candidates, key=lambda item: item["score"])
+
+    def extended_side_segment_from_cluster(self, cluster, anchor, reference_direction, extension):
+        direction = self.pca_direction(cluster)
+        if direction is None:
+            return None
+        direction[2] = 0.0
+        norm = np.linalg.norm(direction)
+        if norm < 1e-9:
+            return None
+        direction = self.align_direction(direction / norm, reference_direction)
+
+        centroid = np.mean(cluster, axis=0)
+        anchor_projection = float(np.dot(anchor - centroid, direction))
+        cluster_projection = np.dot(cluster - centroid, direction)
+        forward_span = max(float(np.max(cluster_projection) - anchor_projection), 0.0)
+        start = centroid + direction * anchor_projection
+        end = start + direction * (forward_span + max(extension, 0.0))
+        return {
+            "start": start,
+            "end": end,
+            "direction": direction,
+            "cluster": cluster,
+        }
+
     def control_waypoints(self, current_track, next_track):
         waypoints = []
         odom = self.latest_odom
@@ -1277,6 +1712,10 @@ class DoorFusionTracker:
             return waypoints
         stamp = rospy.Time.now()
         self.estimate_corridor_direction(odom, stamp)
+        pca_centerline = self.corridor_centerline_from_side_pca(current_track, next_track, odom, stamp)
+        if pca_centerline:
+            return pca_centerline
+
         if current_track is not None and current_track.center is not None:
             direction = self.local_corridor_direction(current_track, odom, stamp)
             waypoints.append((self.waypoint_from_track(current_track, direction), direction))
@@ -1286,10 +1725,6 @@ class DoorFusionTracker:
             last_point = waypoints[-1][0] if waypoints else None
             if last_point is None or np.linalg.norm(next_waypoint - last_point) > 0.5:
                 waypoints.append((next_waypoint, direction))
-        elif current_track is not None and current_track.center is not None:
-            direction = self.local_corridor_direction(current_track, odom, stamp)
-            virtual_waypoint = self.waypoint_from_track(current_track, direction) + direction * self.virtual_next_waypoint_distance_m
-            waypoints.append((virtual_waypoint, direction))
         return waypoints
 
     def publish_path(self, waypoints, stamp):
@@ -1442,6 +1877,8 @@ class DoorFusionTracker:
     def append_corridor_markers(self, markers, marker_id, stamp):
         ordered = self.ordered_corridor_tracks(stamp)
         if len(ordered) < 2:
+            self.latest_corridor_cluster_points = np.empty((0, 3), dtype=np.float64)
+            self.publish_corridor_cluster_cloud(stamp)
             return marker_id
         center_points, left_points, right_points = self.corridor_marker_points(ordered, stamp)
         segment_specs = [
@@ -1452,7 +1889,19 @@ class DoorFusionTracker:
         for namespace, points, color, width in segment_specs:
             if len(points) >= 2:
                 marker_id = self.append_line_list_marker(markers, marker_id, namespace, points, color, width, stamp)
+        self.publish_corridor_cluster_cloud(stamp)
         return marker_id
+
+    def publish_corridor_cluster_cloud(self, stamp):
+        header = Header()
+        header.frame_id = "world"
+        header.stamp = stamp
+        points = self.latest_corridor_cluster_points
+        if points.shape[0] > 0:
+            cloud = pc2.create_cloud_xyz32(header, points.astype(np.float32))
+        else:
+            cloud = pc2.create_cloud_xyz32(header, [])
+        self.corridor_cluster_cloud_pub.publish(cloud)
 
     def append_line_list_marker(self, markers, marker_id, namespace, points, color, width, stamp):
         line = Marker()

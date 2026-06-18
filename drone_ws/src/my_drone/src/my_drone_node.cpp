@@ -4,10 +4,6 @@
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
 #include <std_srvs/Empty.h>
-#include <tf2/LinearMath/Quaternion.h>
-#include <tf2/LinearMath/Matrix3x3.h>
-#include <tf2/LinearMath/Transform.h>
-#include <tf2/LinearMath/Vector3.h>
 
 #include <algorithm>
 #include <cmath>
@@ -17,7 +13,6 @@
 namespace
 {
 std::vector<geometry_msgs::PoseStamped> waypoints;
-std::vector<geometry_msgs::Point> reached_waypoints;
 std::size_t current_index = 0;
 nav_msgs::Odometry latest_odom;
 bool has_odom = false;
@@ -26,22 +21,8 @@ ros::Publisher waypoint_path_pub;
 ros::Publisher current_waypoint_pub;
 
 double reached_threshold_m = 5.0;
-double path_update_match_tolerance_m = 6.0;
-double fallback_extension_m = 8.0;
-double align_after_reached_s = 1.0;
-double search_yaw_deg = 45.0;
-double search_sweep_period_s = 3.0;
+double behind_reject_distance_m = 0.0;
 std::string world_frame_id = "world";
-bool aligning = false;
-ros::Time align_until;
-geometry_msgs::PoseStamped align_target;
-bool align_then_search = false;
-bool searching_next_door = false;
-ros::Time search_started;
-geometry_msgs::Point search_hold_position;
-tf2::Vector3 search_base_direction(1.0, 0.0, 0.0);
-
-tf2::Vector3 droneForwardWorld();
 
 geometry_msgs::Point nedToWorld(const geometry_msgs::Point& ned)
 {
@@ -60,151 +41,83 @@ double distance3d(const geometry_msgs::Point& a, const geometry_msgs::Point& b)
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-bool samePoint(const geometry_msgs::Point& a, const geometry_msgs::Point& b, double tolerance)
+bool validQuaternion(const geometry_msgs::Quaternion& q)
 {
-    return distance3d(a, b) <= tolerance;
+    const double norm2 = q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z;
+    return norm2 > 1e-12;
 }
 
-bool alreadyReached(const geometry_msgs::Point& point)
+bool corridorDirectionFromPose(const geometry_msgs::PoseStamped& pose, geometry_msgs::Point& direction)
 {
-    for (const auto& reached : reached_waypoints) {
-        if (samePoint(point, reached, reached_threshold_m)) {
+    if (!validQuaternion(pose.pose.orientation)) {
+        return false;
+    }
+
+    const auto& q = pose.pose.orientation;
+    const double tx = 0.0;
+    const double ty = 2.0 * q.z;
+    const double tz = -2.0 * q.y;
+    direction.x = 1.0 + q.y * tz - q.z * ty;
+    direction.y = q.w * ty + q.z * tx - q.x * tz;
+    direction.z = 0.0;
+
+    const double norm = std::hypot(direction.x, direction.y);
+    if (norm < 1e-6) {
+        return false;
+    }
+    direction.x /= norm;
+    direction.y /= norm;
+    return true;
+}
+
+bool corridorDirectionFromPath(
+    const std::vector<geometry_msgs::PoseStamped>& path,
+    geometry_msgs::Point& direction)
+{
+    for (const auto& pose : path) {
+        if (corridorDirectionFromPose(pose, direction)) {
             return true;
         }
     }
     return false;
 }
 
-geometry_msgs::Point addWorldVector(const geometry_msgs::Point& point, const tf2::Vector3& direction, double distance)
+double forwardDistance(
+    const geometry_msgs::Point& from,
+    const geometry_msgs::Point& to,
+    const geometry_msgs::Point& direction)
 {
-    geometry_msgs::Point out = point;
-    out.x += direction.x() * distance;
-    out.y += direction.y() * distance;
-    out.z += direction.z() * distance;
-    return out;
+    return (to.x - from.x) * direction.x + (to.y - from.y) * direction.y;
 }
 
-tf2::Vector3 normalizedDirection(const geometry_msgs::Point& from, const geometry_msgs::Point& to)
+std::vector<geometry_msgs::PoseStamped> prunePassedWaypoints(
+    const std::vector<geometry_msgs::PoseStamped>& input)
 {
-    tf2::Vector3 direction(to.x - from.x, to.y - from.y, to.z - from.z);
-    if (direction.length2() < 1e-6) {
-        return tf2::Vector3(1.0, 0.0, 0.0);
+    if (!has_odom || input.size() <= 1) {
+        return input;
     }
-    return direction.normalized();
-}
 
-tf2::Vector3 directionWithYawOffset(const tf2::Vector3& base_direction, double yaw_offset)
-{
-    tf2::Vector3 base = base_direction;
-    if (base.length2() < 1e-6) {
-        base = tf2::Vector3(1.0, 0.0, 0.0);
+    geometry_msgs::Point corridor_direction;
+    if (!corridorDirectionFromPath(input, corridor_direction)) {
+        return input;
     }
-    base.normalize();
 
-    double horizontal_norm = std::hypot(base.x(), base.y());
-    if (horizontal_norm < 1e-6) {
-        horizontal_norm = 1.0;
-    }
-    const double yaw = std::atan2(base.y(), base.x()) + yaw_offset;
-    tf2::Vector3 direction(horizontal_norm * std::cos(yaw), horizontal_norm * std::sin(yaw), base.z());
-    if (direction.length2() < 1e-6) {
-        return tf2::Vector3(1.0, 0.0, 0.0);
-    }
-    return direction.normalized();
-}
+    const geometry_msgs::Point current_world = nedToWorld(latest_odom.pose.pose.position);
+    std::vector<geometry_msgs::PoseStamped> filtered;
+    filtered.reserve(input.size());
 
-geometry_msgs::Quaternion orientationFacingDirection(const tf2::Vector3& direction)
-{
-    tf2::Vector3 x_axis = direction;
-    if (x_axis.length2() < 1e-6) {
-        x_axis = tf2::Vector3(1.0, 0.0, 0.0);
-    }
-    x_axis.normalize();
-
-    tf2::Vector3 up(0.0, 0.0, 1.0);
-    if (std::abs(x_axis.dot(up)) > 0.98) {
-        up = tf2::Vector3(0.0, 1.0, 0.0);
-    }
-    tf2::Vector3 y_axis = up.cross(x_axis).normalized();
-    tf2::Vector3 z_axis = x_axis.cross(y_axis).normalized();
-
-    tf2::Matrix3x3 rotation(
-        x_axis.x(), y_axis.x(), z_axis.x(),
-        x_axis.y(), y_axis.y(), z_axis.y(),
-        x_axis.z(), y_axis.z(), z_axis.z());
-    tf2::Quaternion q;
-    rotation.getRotation(q);
-    q.normalize();
-
-    geometry_msgs::Quaternion out;
-    out.x = q.x();
-    out.y = q.y();
-    out.z = q.z();
-    out.w = q.w();
-    return out;
-}
-
-bool hasValidOrientation(const geometry_msgs::Quaternion& q)
-{
-    const double norm2 = q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z;
-    return norm2 > 1e-12;
-}
-
-void updateWaypointOrientations()
-{
-    if (waypoints.empty()) {
-        return;
-    }
-    for (std::size_t i = 0; i < waypoints.size(); ++i) {
-        if (hasValidOrientation(waypoints[i].pose.orientation)) {
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        const auto& pose = input[i];
+        const double ahead = forwardDistance(current_world, pose.pose.position, corridor_direction);
+        const double distance = distance3d(current_world, pose.pose.position);
+        const bool has_later_waypoint = i + 1 < input.size();
+        if (has_later_waypoint && (ahead < -behind_reject_distance_m || distance < reached_threshold_m)) {
             continue;
         }
-        tf2::Vector3 direction = droneForwardWorld();
-        if (i + 1 < waypoints.size()) {
-            direction = normalizedDirection(waypoints[i].pose.position, waypoints[i + 1].pose.position);
-        } else if (i > 0) {
-            direction = normalizedDirection(waypoints[i - 1].pose.position, waypoints[i].pose.position);
-        }
-        waypoints[i].pose.orientation = orientationFacingDirection(direction);
-    }
-}
-
-tf2::Vector3 droneForwardWorld()
-{
-    const auto& q_msg = latest_odom.pose.pose.orientation;
-    tf2::Quaternion q(q_msg.x, q_msg.y, q_msg.z, q_msg.w);
-    if (q.length2() < 1e-12) {
-        return tf2::Vector3(1.0, 0.0, 0.0);
-    }
-    q.normalize();
-    const tf2::Vector3 forward_ned = tf2::quatRotate(q, tf2::Vector3(1.0, 0.0, 0.0));
-    tf2::Vector3 forward_world(forward_ned.x(), -forward_ned.y(), -forward_ned.z());
-    forward_world.setZ(0.0);
-    if (forward_world.length2() < 1e-6) {
-        return tf2::Vector3(1.0, 0.0, 0.0);
-    }
-    return forward_world.normalized();
-}
-
-void appendFallbackWaypoint()
-{
-    if (waypoints.empty()) {
-        return;
-    }
-    tf2::Vector3 direction = droneForwardWorld();
-    if (waypoints.size() >= 2) {
-        direction = normalizedDirection(
-            waypoints[waypoints.size() - 2].pose.position,
-            waypoints.back().pose.position);
+        filtered.push_back(pose);
     }
 
-    geometry_msgs::PoseStamped fallback = waypoints.back();
-    fallback.header.stamp = ros::Time::now();
-    fallback.header.frame_id = world_frame_id;
-    fallback.pose.position = addWorldVector(waypoints.back().pose.position, direction, fallback_extension_m);
-    fallback.pose.orientation = orientationFacingDirection(direction);
-    waypoints.push_back(fallback);
-    updateWaypointOrientations();
+    return filtered.empty() ? input : filtered;
 }
 
 void publishPath()
@@ -215,87 +128,29 @@ void publishPath()
     path.poses = waypoints;
     for (auto& pose : path.poses) {
         pose.header = path.header;
-        if (!hasValidOrientation(pose.pose.orientation)) {
-            pose.pose.orientation.w = 1.0;
-        }
     }
     waypoint_path_pub.publish(path);
 }
 
 void publishCurrentWaypoint()
 {
-    if (searching_next_door) {
-        geometry_msgs::PoseStamped target;
-        target.header.stamp = ros::Time::now();
-        target.header.frame_id = world_frame_id;
-        target.pose.position = search_hold_position;
-
-        const double period = std::max(0.1, search_sweep_period_s);
-        const double elapsed = (ros::Time::now() - search_started).toSec();
-        const double yaw_offset =
-            (search_yaw_deg * M_PI / 180.0) * std::sin(2.0 * M_PI * elapsed / period);
-        target.pose.orientation = orientationFacingDirection(
-            directionWithYawOffset(search_base_direction, yaw_offset));
-        current_waypoint_pub.publish(target);
-        return;
-    }
-
-    if (aligning) {
-        geometry_msgs::PoseStamped target = align_target;
-        target.header.stamp = ros::Time::now();
-        target.header.frame_id = world_frame_id;
-        current_waypoint_pub.publish(target);
-        return;
-    }
-
     if (waypoints.empty()) {
         return;
     }
-
     current_index = std::min(current_index, waypoints.size() - 1);
     geometry_msgs::PoseStamped target = waypoints[current_index];
     target.header.stamp = ros::Time::now();
     target.header.frame_id = world_frame_id;
-    if (!hasValidOrientation(target.pose.orientation)) {
-        target.pose.orientation.w = 1.0;
-    }
     current_waypoint_pub.publish(target);
-}
 
-void beginAlignBeforeNext(const geometry_msgs::Point& hold_position, const tf2::Vector3& direction)
-{
-    aligning = align_after_reached_s > 0.0;
-    if (!aligning) {
-        return;
-    }
-
-    align_until = ros::Time::now() + ros::Duration(align_after_reached_s);
-    align_target.header.stamp = ros::Time::now();
-    align_target.header.frame_id = world_frame_id;
-    align_target.pose.position = hold_position;
-    align_target.pose.orientation = orientationFacingDirection(direction);
-}
-
-void beginSearchForNextDoor(const geometry_msgs::Point& hold_position, const tf2::Vector3& base_direction)
-{
-    searching_next_door = true;
-    search_started = ros::Time::now();
-    search_hold_position = hold_position;
-    search_base_direction = base_direction.length2() < 1e-6 ? droneForwardWorld() : base_direction.normalized();
-}
-
-void beginAlignThenSearchForNextDoor(const geometry_msgs::Point& hold_position, const tf2::Vector3& base_direction)
-{
-    search_hold_position = hold_position;
-    search_base_direction = base_direction.length2() < 1e-6 ? droneForwardWorld() : base_direction.normalized();
-    searching_next_door = false;
-    align_then_search = align_after_reached_s > 0.0;
-
-    if (align_then_search) {
-        beginAlignBeforeNext(hold_position, search_base_direction);
-    } else {
-        beginSearchForNextDoor(hold_position, search_base_direction);
-    }
+    ROS_INFO_THROTTLE(
+        0.5,
+        "my_drone: tracking waypoint #%zu/%zu target=(%.1f %.1f %.1f)",
+        current_index + 1,
+        waypoints.size(),
+        target.pose.position.x,
+        target.pose.position.y,
+        target.pose.position.z);
 }
 
 void odomCb(const nav_msgs::Odometry::ConstPtr& msg)
@@ -316,52 +171,29 @@ void pathCb(const nav_msgs::Path::ConstPtr& msg)
         old_target = waypoints[current_index].pose.position;
     }
 
-    std::vector<geometry_msgs::PoseStamped> new_waypoints = msg->poses;
-    for (auto& pose : new_waypoints) {
+    waypoints = prunePassedWaypoints(msg->poses);
+    for (auto& pose : waypoints) {
         pose.header.frame_id = world_frame_id;
     }
-    new_waypoints.erase(
-        std::remove_if(
-            new_waypoints.begin(),
-            new_waypoints.end(),
-            [](const geometry_msgs::PoseStamped& pose) {
-                return alreadyReached(pose.pose.position);
-            }),
-        new_waypoints.end());
-    if (new_waypoints.empty()) {
-        return;
-    }
 
-    if (!had_target) {
-        waypoints = new_waypoints;
-        current_index = 0;
-    } else if (alreadyReached(old_target)) {
-        waypoints = new_waypoints;
-        current_index = 0;
-    } else {
-        std::size_t matched_index = 0;
-        double best_distance = distance3d(old_target, new_waypoints.front().pose.position);
-        for (std::size_t i = 1; i < new_waypoints.size(); ++i) {
-            const double d = distance3d(old_target, new_waypoints[i].pose.position);
+    if (had_target) {
+        std::size_t best_index = 0;
+        double best_distance = distance3d(old_target, waypoints.front().pose.position);
+        for (std::size_t i = 1; i < waypoints.size(); ++i) {
+            const double d = distance3d(old_target, waypoints[i].pose.position);
             if (d < best_distance) {
                 best_distance = d;
-                matched_index = i;
+                best_index = i;
             }
         }
-        if (best_distance > path_update_match_tolerance_m) {
-            ROS_WARN_THROTTLE(
-                1.0,
-                "my_drone: ignoring path update; current target moved %.1fm away",
-                best_distance);
-            return;
+        if (best_index < current_index && current_index < waypoints.size()) {
+            best_index = current_index;
         }
-        waypoints = new_waypoints;
-        current_index = matched_index;
+        current_index = best_index;
+    } else {
+        current_index = 0;
     }
 
-    updateWaypointOrientations();
-    align_then_search = false;
-    searching_next_door = false;
     publishPath();
     publishCurrentWaypoint();
 }
@@ -369,13 +201,9 @@ void pathCb(const nav_msgs::Path::ConstPtr& msg)
 void addWaypointCb(const geometry_msgs::PoseStamped::ConstPtr& msg)
 {
     geometry_msgs::PoseStamped wp = *msg;
-    wp.header.frame_id = world_frame_id;
     wp.header.stamp = ros::Time::now();
-    if (!hasValidOrientation(wp.pose.orientation)) {
-        wp.pose.orientation.w = 1.0;
-    }
+    wp.header.frame_id = world_frame_id;
     waypoints.push_back(wp);
-    updateWaypointOrientations();
     publishPath();
     publishCurrentWaypoint();
 }
@@ -383,11 +211,7 @@ void addWaypointCb(const geometry_msgs::PoseStamped::ConstPtr& msg)
 bool clearWaypointsCb(std_srvs::Empty::Request&, std_srvs::Empty::Response&)
 {
     waypoints.clear();
-    reached_waypoints.clear();
     current_index = 0;
-    aligning = false;
-    align_then_search = false;
-    searching_next_door = false;
     publishPath();
     return true;
 }
@@ -400,56 +224,14 @@ void timerCb(const ros::TimerEvent&)
 
     current_index = std::min(current_index, waypoints.size() - 1);
     const geometry_msgs::Point current_world = nedToWorld(latest_odom.pose.pose.position);
-
-    if (searching_next_door) {
-        publishCurrentWaypoint();
-        return;
-    }
-
-    if (aligning) {
-        if (ros::Time::now() >= align_until) {
-            aligning = false;
-            if (align_then_search) {
-                align_then_search = false;
-                beginSearchForNextDoor(search_hold_position, search_base_direction);
-                publishCurrentWaypoint();
-                return;
-            }
-        } else {
-            publishCurrentWaypoint();
-            return;
-        }
-    }
-
     const double distance = distance3d(current_world, waypoints[current_index].pose.position);
-
     if (distance < reached_threshold_m && current_index + 1 < waypoints.size()) {
-        const tf2::Vector3 next_direction =
-            normalizedDirection(waypoints[current_index].pose.position, waypoints[current_index + 1].pose.position);
-        if (!alreadyReached(waypoints[current_index].pose.position)) {
-            reached_waypoints.push_back(waypoints[current_index].pose.position);
-        }
-        beginAlignBeforeNext(current_world, next_direction);
         ++current_index;
         ROS_INFO(
-            "my_drone: reached waypoint, aligning %.2fs before switching to #%zu/%zu",
-            align_after_reached_s,
+            "my_drone: reached waypoint, switching to #%zu/%zu distance=%.2fm",
             current_index + 1,
-            waypoints.size());
-    } else if (distance < reached_threshold_m && current_index + 1 >= waypoints.size()) {
-        const geometry_msgs::Point reached_position = waypoints[current_index].pose.position;
-        if (!alreadyReached(waypoints[current_index].pose.position)) {
-            reached_waypoints.push_back(waypoints[current_index].pose.position);
-        }
-        tf2::Vector3 search_direction = droneForwardWorld();
-        if (current_index > 0) {
-            search_direction = normalizedDirection(waypoints[current_index - 1].pose.position, reached_position);
-        }
-        beginAlignThenSearchForNextDoor(reached_position, search_direction);
-        ROS_WARN_THROTTLE(
-            1.0,
-            "my_drone: no next door yet; aligning then searching +/-%.1f deg",
-            search_yaw_deg);
+            waypoints.size(),
+            distance);
     }
 
     publishCurrentWaypoint();
@@ -467,11 +249,7 @@ int main(int argc, char** argv)
     pnh.param<std::string>("input_path_topic", input_path_topic, "/door_waypoint_detector/waypoints_world");
     pnh.param<std::string>("odom_topic", odom_topic, "/eskf_odom");
     pnh.param("reached_threshold_m", reached_threshold_m, 5.0);
-    pnh.param("path_update_match_tolerance_m", path_update_match_tolerance_m, 6.0);
-    pnh.param("fallback_extension_m", fallback_extension_m, 8.0);
-    pnh.param("align_after_reached_s", align_after_reached_s, 1.0);
-    pnh.param("search_yaw_deg", search_yaw_deg, 45.0);
-    pnh.param("search_sweep_period_s", search_sweep_period_s, 3.0);
+    pnh.param("behind_reject_distance_m", behind_reject_distance_m, 0.0);
     pnh.param<std::string>("world_frame_id", world_frame_id, "world");
 
     waypoint_path_pub = nh.advertise<nav_msgs::Path>("/my_drone/waypoints", 1, true);
@@ -484,10 +262,11 @@ int main(int argc, char** argv)
     ros::Timer timer = nh.createTimer(ros::Duration(0.05), timerCb);
 
     ROS_INFO(
-        "my_drone: path=%s odom=%s threshold=%.2fm",
+        "my_drone: path=%s odom=%s reached_threshold=%.2fm behind_reject=%.2fm",
         input_path_topic.c_str(),
         odom_topic.c_str(),
-        reached_threshold_m);
+        reached_threshold_m,
+        behind_reject_distance_m);
 
     ros::spin();
     return 0;

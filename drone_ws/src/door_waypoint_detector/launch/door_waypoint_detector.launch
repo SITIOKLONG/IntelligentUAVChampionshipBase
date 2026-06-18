@@ -22,6 +22,9 @@
     <param name="stereo_cloud_topic" value="$(arg stereo_cloud_topic)"/>
     <param name="back_stereo_cloud_topic" value="$(arg back_stereo_cloud_topic)"/>
     <param name="lidar_cloud_topic" value="/airsim_node/drone_1/lidar"/>
+    <param name="use_stereo_cloud" value="false"/>
+    <param name="use_back_stereo_cloud" value="false"/>
+    <param name="use_lidar_cloud" value="true"/>
     <param name="odom_topic" value="$(arg odom_topic)"/>
     <rosparam param="lidar_offset_body">[0.0, 0.0, -0.05]</rosparam>
     <param name="output_topic" value="/door_waypoint_detector/preprocessed_cloud_world"/>
@@ -42,6 +45,7 @@
     <param name="yolo_box_cloud_topic" value="/door_waypoint_detector/yolo_box_points_world"/>
     <param name="current_door_cloud_topic" value="/door_waypoint_detector/current_door_points_world"/>
     <param name="next_door_cloud_topic" value="/door_waypoint_detector/next_door_points_world"/>
+    <param name="corridor_cluster_cloud_topic" value="/door_waypoint_detector/corridor_pca_cluster_points_world"/>
     <param name="waypoint_path_topic" value="/door_waypoint_detector/waypoints_world"/>
     <param name="next_waypoint_topic" value="/door_waypoint_detector/next_waypoint_world"/>
     <param name="image_queue_size" value="1"/>
@@ -65,18 +69,28 @@
     <param name="waypoint_z_offset_m" value="0.0"/>
     <param name="corridor_min_side_points" value="2"/>
     <param name="corridor_direction_max_change_deg" value="40.0"/>
-    <param name="corridor_cloud_tube_radius_m" value="1.0"/>
+    <param name="corridor_cloud_tube_radius_m" value="1.2"/>
+    <param name="corridor_cloud_search_radius_m" value="4.0"/>
+    <param name="corridor_cloud_cluster_radius_m" value="1.0"/>
+    <param name="corridor_cloud_cluster_max_points" value="5000"/>
+    <param name="corridor_pca_cluster_extend_m" value="3.0"/>
+    <param name="corridor_pca_cluster_include_radius_m" value="0.6"/>
     <param name="corridor_cloud_min_points" value="12"/>
     <param name="corridor_edge_min_distance_m" value="8.0"/>
     <param name="corridor_edge_max_distance_m" value="22.0"/>
     <param name="corridor_edge_expected_distance_m" value="15.0"/>
     <param name="corridor_edge_max_pca_angle_deg" value="35.0"/>
+    <param name="corridor_memory_back_distance_m" value="15.0"/>
+    <param name="corridor_memory_max_age_s" value="30.0"/>
+    <param name="corridor_pca_smoothing_alpha" value="0.2"/>
+    <param name="corridor_lookahead_distance_m" value="10.0"/>
+    <param name="corridor_center_anchor_alpha" value="0.8"/>
     <param name="approach_distance_m" value="2.0"/>
     <param name="pass_distance_m" value="2.0"/>
-    <param name="track_timeout_s" value="45.0"/>
+    <param name="track_timeout_s" value="9999.0"/>
     <param name="track_merge_distance_m" value="3.0"/>
     <param name="min_door_spacing_m" value="8.0"/>
-    <param name="virtual_next_waypoint_distance_m" value="0.0"/>
+    <param name="virtual_next_waypoint_distance_m" value="12.0"/>
     <param name="min_track_seen" value="1"/>
     <param name="point_refine_radius_m" value="3.5"/>
     <param name="point_refine_cluster_radius_m" value="0.8"/>

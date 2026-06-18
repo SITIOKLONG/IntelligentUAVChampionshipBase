@@ -1,22 +1,18 @@
 <launch>
     <arg name="auto_takeoff" default="true"/>
-    <arg name="reached_threshold_m" default="5.0"/>
+    <arg name="reached_threshold_m" default="8.0"/>
+    <arg name="behind_reject_distance_m" default="0.0"/>
 
     <node pkg="imu_gps_odometry" type="imu_gps_odometry" name="imu_gps_odometry" output="screen"/>
     <!-- <node pkg="controller_test" type="controller_test" name="controller_test" output="screen"/> -->
 
     <node pkg="debug" type="debug_node" name="debug_node" output="screen"/>
-    <include file="$(find stereo_depth)/launch/stereo_depth.launch"/>
     <include file="$(find door_waypoint_detector)/launch/door_waypoint_detector.launch"/>
     <node pkg="my_drone" type="my_drone_node" name="my_drone_node" output="screen">
         <param name="input_path_topic" value="/door_waypoint_detector/waypoints_world"/>
         <param name="odom_topic" value="/eskf_odom"/>
         <param name="reached_threshold_m" value="$(arg reached_threshold_m)"/>
-        <param name="path_update_match_tolerance_m" value="6.0"/>
-        <param name="fallback_extension_m" value="8.0"/>
-        <param name="align_after_reached_s" value="1.0"/>
-        <param name="search_yaw_deg" value="45.0"/>
-        <param name="search_sweep_period_s" value="5.0"/>
+        <param name="behind_reject_distance_m" value="$(arg behind_reject_distance_m)"/>
     </node>
     <node pkg="drone_control" type="waypoint_vel_controller" name="waypoint_vel_controller" output="screen">
         <param name="auto_takeoff" value="$(arg auto_takeoff)"/>
@@ -27,11 +23,11 @@
         <param name="max_target_age_s" value="2.0"/>
         <param name="startup_forward_s" value="3.0"/>
         <param name="startup_forward_vx" value="2.0"/>
-        <param name="kp_xy" value="0.2"/>
+        <param name="kp_xy" value="0.6"/>
         <param name="kp_z" value="0.6"/>
         <param name="kp_yaw" value="20.0"/>
-        <param name="max_xy_speed" value="999.0"/>
-        <param name="max_z_speed" value="999.0"/>
+        <param name="max_xy_speed" value="8.0"/>
+        <param name="max_z_speed" value="4.0"/>
         <param name="max_yaw_rate" value="999.0"/>
     </node>
 </launch>
